@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7.2';
+const APP_VERSION = '9.7.3';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -946,10 +946,11 @@ function planView() {
     <select class="f" data-set="dayIdx" aria-label="Current day">${DAYS.map((x, i) => `<option value="${i}" ${p.dayIdx === i ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
     <div class="row between" style="margin-top:10px"><label class="l" for="blockstart" style="margin:0">Block ${(S.settings.blocks || []).length} started</label><input class="f" id="blockstart" type="date" data-act="blockstart" value="${esc(currentBlockStart() || '')}" style="width:auto;min-height:42px"></div></div>`;
   h += `<div class="seg"><button data-act="planmode" data-v="week" class="${S.planMode === 'week' ? 'on' : ''}">By week</button><button data-act="planmode" data-v="block" class="${S.planMode === 'block' ? 'on' : ''}">Whole block</button></div>`;
+  h += '<div class="callout info" style="margin:0 0 12px">To change exercises, sets, reps or weights, tap <b>✎ Edit</b> on a day.</div>';
   if (S.planMode === 'week') {
     h += `<div class="chips weeks">${[0, 1, 2, 3, 4].map((v) => `<button class="chip ${S.planWeek === v ? 'on' : ''}" data-act="planweek" data-v="${v}">W${v + 1}<small>${WEEK_NAMES[v]}</small></button>`).join('')}</div>`;
     DAYS.forEach((d, i) => {
-      h += `<div class="card"><div class="row between"><div class="grow"><div class="b" style="font-size:17px">${esc(d.name)}${S.planWeek === p.week ? statusPill(i) : ''}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm" data-act="editday" data-d="${i}">Edit</button></div>`;
+      h += `<div class="card"><div class="row between"><div class="grow"><div class="b" style="font-size:17px">${esc(d.name)}${S.planWeek === p.week ? statusPill(i) : ''}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div>`;
       if (d.type === 'strength') {
         h += '<div style="margin-top:6px">';
         for (const ex of expandWeek(i, S.planWeek)) {
@@ -963,8 +964,8 @@ function planView() {
   } else {
     h += '<div class="tiny muted" style="margin-bottom:10px">Every exercise across all five weeks. W1–W5 = sets×reps @ kg (warm-ups not shown).</div>';
     DAYS.forEach((d, i) => {
-      if (d.type !== 'strength') { h += `<div class="card"><div class="row between"><div><div class="b">${esc(d.name)}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm" data-act="editday" data-d="${i}">Edit</button></div></div>`; return; }
-      h += `<div class="card"><div class="row between"><div class="b" style="font-size:17px">${esc(d.name)}</div><button class="btn sm" data-act="editday" data-d="${i}">Edit</button></div>`;
+      if (d.type !== 'strength') { h += `<div class="card"><div class="row between"><div><div class="b">${esc(d.name)}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div></div>`; return; }
+      h += `<div class="card"><div class="row between"><div class="b" style="font-size:17px">${esc(d.name)}</div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div>`;
       d.exercises.forEach((ex) => {
         h += `<div class="pex"><div class="nm">${esc((metaOf(ex.id) || { name: ex.id }).name)}</div>${ex.weeks.map((grps, w) => `<div class="wkline ${w === p.week ? 'cur' : ''}"><span>W${w + 1}</span><span>${grps.map((g) => `${g.sets}×${g.reps} @ ${g.weight}`).join(' · ')}</span></div>`).join('')}</div>`;
       });
