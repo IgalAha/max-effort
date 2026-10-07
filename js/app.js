@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7.4';
+const APP_VERSION = '9.7.5';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -217,7 +217,7 @@ function render() {
   else if (S.exportOpen) { back = 'exportback'; title = 'Export'; body = exportView(ctx); }
   else body = meView(ctx);
 
-  $('#top').innerHTML = `${back ? `<button class="back" data-act="${back}">‹ Back</button>` : ''}<h1 class="${back ? 'grow' : ''}" style="${back ? 'font-size:18px;text-align:center' : ''}">${esc(title)}</h1>
+  $('#top').innerHTML = `${back ? `<button class="back" data-act="${back}">‹ Back</button>` : ''}<h1 class="${back ? 'grow' : ''}" style="${back ? 'font-size:18px;text-align:center' : ''}">${esc(title)}${back ? '' : `<span class="ver">v${APP_VERSION}</span>`}</h1>
     <button class="status-btn ${ctx.recovery.status}" data-act="gohealth" aria-label="Recovery status ${ctx.recovery.status}">${ctx.recovery.status}</button>`;
   $('#app').innerHTML = body;
   renderOverlay();

@@ -19,6 +19,7 @@ input, select, textarea { font: inherit; color: var(--text); }
 /* ---------- top bar ---------- */
 #top { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; background: rgba(15, 17, 20, .96); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 #top h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.2px; }
+#top .ver { margin-left: 8px; font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: 0; vertical-align: middle; }
 #top .back { background: none; border: 0; color: var(--accent); font-weight: 700; font-size: 16px; padding: 6px 0; min-height: 40px; }
 .status-btn { border: 0; border-radius: 99px; padding: 6px 12px; font-weight: 800; font-size: 13px; letter-spacing: .3px; min-height: 34px; }
 .GREEN { background: var(--good-soft); color: var(--good); } .YELLOW { background: var(--warn-soft); color: var(--warn); } .RED { background: var(--bad-soft); color: var(--bad); }
