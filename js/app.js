@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7.3';
+const APP_VERSION = '9.7.4';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -56,6 +56,14 @@ function setPos(n, from = pos()) {
 // Which plan days are done or skipped in the current week. The "next" day is the first day from the current
 // pointer onwards that is neither, so doing days out of order never loses the one you missed.
 const wkKey = () => `${currentBlockStart()}|${S.settings.week}`;
+// Plan days finished today: marked done today, a workout logged today for this week, or cardio counted for it today.
+function doneTodayIdx() {
+  const t = todayStr(); const L = weekLog(); const out = new Set();
+  DAYS.forEach((d, i) => { if (dayState(i) === 'done' && (L.doneOn || {})[d.id] === t) out.add(i); });
+  for (const w of S.data.workouts) if (w.date === t && w.planRef && w.planRef.week === S.settings.week) { const i = dayIndexOf(w.planRef); if (i >= 0 && dayState(i) === 'done') out.add(i); }
+  for (const c of S.data.cardio) if (c.date === t && c.planDayId) { const i = DAYS.findIndex((d) => d.id === c.planDayId); if (i >= 0 && dayState(i) === 'done') out.add(i); }
+  return [...out].sort((a, b) => a - b);
+}
 function weekLog() {
   let L = S.settings.weekLog;
   // First time a week is tracked (or the week was set by hand): days before the current one count as done.
@@ -70,6 +78,8 @@ async function markDay(i, status) {
   const id = DAYS[i].id;
   L.done = L.done.filter((x) => x !== id); L.skipped = L.skipped.filter((x) => x !== id);
   if (status) L[status].push(id);
+  L.doneOn = L.doneOn || {};
+  if (status === 'done') L.doneOn[id] = L.doneOn[id] || todayStr(); else delete L.doneOn[id];
   const from = pos();
   let next = -1;
   for (let k = from.dayIdx; k < DAYS.length; k++) if (!dayState(k)) { next = k; break; }
@@ -258,8 +268,10 @@ function homeView(ctx) {
   // Today
   S.shownDay = ctx.t;
   const todayTxt = new Date(`${ctx.t}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  const doneT = doneTodayIdx().filter((i) => i !== p.dayIdx);
   h += `<div class="card"><div style="font-size:17px;font-weight:800;margin-bottom:6px">Today · ${esc(todayTxt)}</div>
-    <div class="eyebrow">Week ${p.week + 1} of 5 · ${esc(WEEK_NAMES[p.week])} · ${esc(dayNo(day))} of ${DAYS.length}</div><div class="big">${esc(shortDay(day))}</div><div class="muted">${esc(day.title)}</div>`;
+    ${doneT.map((i) => `<button data-act="daysheet" data-d="${i}" style="display:block;width:100%;text-align:left;min-height:44px;margin:0 0 10px;padding:10px 12px;border:0;border-radius:12px;background:rgba(48,209,88,.14);color:var(--good);font:inherit;font-size:15px;font-weight:800;cursor:pointer">✓ Done today: ${esc(DAYS[i].name)} · ${esc(DAYS[i].title)}</button>`).join('')}
+    <div class="eyebrow">${doneT.length ? 'Next up · ' : ''}Week ${p.week + 1} of 5 · ${esc(WEEK_NAMES[p.week])} · ${esc(dayNo(day))} of ${DAYS.length}</div><div class="big">${esc(shortDay(day))}</div><div class="muted">${esc(day.title)}</div>`;
   E.sequencingWarnings({ dayType: day.type, dayTitle: day.title, today: ctx.t, cardio: S.data.cardio, workouts: S.data.workouts }).forEach((w) => { h += `<div class="callout warn">${esc(w)}</div>`; });
   if (day.type === 'strength') {
     const sugg = suggestionsFor(p.dayIdx, p.week, ctx);
@@ -1690,6 +1702,7 @@ document.addEventListener('change', async (e) => {
       if (!confirm('Replace everything on this phone with this backup?')) return;
       await db.importAll(data);
       if (data.plan) await setMeta('plan', data.plan);
+      await setMeta('lastBackup', new Date().toISOString());
       location.reload();
     } else if (a === 'importplan') {
       const p = JSON.parse(txt);
