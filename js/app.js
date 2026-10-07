@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7.1';
+const APP_VERSION = '9.7.2';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -256,7 +256,10 @@ function homeView(ctx) {
 
   if (installPrompt && !isStandalone()) h += '<div class="callout info row between" style="margin:0 0 12px"><span>Install Max Effort as an app on this phone.</span><button class="btn primary sm" data-act="install">Install</button></div>';
   // Today
-  h += `<div class="card"><div class="eyebrow">Week ${p.week + 1} of 5 · ${esc(WEEK_NAMES[p.week])} · ${esc(dayNo(day))}</div><div class="big">${esc(shortDay(day))}</div><div class="muted">${esc(day.title)}</div>`;
+  S.shownDay = ctx.t;
+  const todayTxt = new Date(`${ctx.t}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+  h += `<div class="card"><div style="font-size:17px;font-weight:800;margin-bottom:6px">Today · ${esc(todayTxt)}</div>
+    <div class="eyebrow">Week ${p.week + 1} of 5 · ${esc(WEEK_NAMES[p.week])} · ${esc(dayNo(day))} of ${DAYS.length}</div><div class="big">${esc(shortDay(day))}</div><div class="muted">${esc(day.title)}</div>`;
   E.sequencingWarnings({ dayType: day.type, dayTitle: day.title, today: ctx.t, cardio: S.data.cardio, workouts: S.data.workouts }).forEach((w) => { h += `<div class="callout warn">${esc(w)}</div>`; });
   if (day.type === 'strength') {
     const sugg = suggestionsFor(p.dayIdx, p.week, ctx);
@@ -1736,7 +1739,7 @@ window.addEventListener('appinstalled', () => { installPrompt = null; toast('Ins
       const hadController = !!navigator.serviceWorker.controller;
       let reloaded = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded && !S.draft) { reloaded = true; location.reload(); } else if (hadController && S.draft) toast('Update ready. It will load next time you open the app.'); });
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {}); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.tab === 'home' && S.shownDay && S.shownDay !== todayStr()) render(); if (document.visibilityState === 'visible') navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {}); });
       navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(() => navigator.serviceWorker.ready).then(() => { S.swState = 'active'; if (S.tab === 'me' || installPrompt) render(); }).catch(() => { S.swState = 'failed'; render(); });
       setTimeout(() => { if (!S.swState) { S.swState = navigator.serviceWorker.controller ? 'active' : 'failed'; if (S.tab === 'me') render(); } }, 8000);
     }
