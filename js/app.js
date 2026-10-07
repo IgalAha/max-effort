@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7';
+const APP_VERSION = '9.7.1';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -969,7 +969,7 @@ function planView() {
     });
   }
   h += `<h2>Manage plan</h2><div class="card"><button class="btn primary block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
-    <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" accept=".json" data-act="importplan" hidden></label></div>
+    <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" data-act="importplan" hidden></label></div>
     <button class="btn danger block sm" data-act="resetplan">Reset to original plan</button></div>`;
   return h;
 }
@@ -1349,11 +1349,11 @@ function meView(ctx) {
     <div class="card"><h3>On this phone</h3><div class="small muted" style="margin-top:4px">${d.cardio.length} Garmin/cardio activities · ${d.workouts.length} logged lifting sessions · ${d.sleep.length} sleep weeks · ${d.rhr.length} resting-HR weeks · ${d.checkins.length} check-ins</div>
     <div class="tiny faint" style="margin-top:6px">${S.lastBackup ? `Last backup ${fmtDate(S.lastBackup.slice(0, 10))}.` : 'No backup yet.'} Clearing Chrome's site data erases everything, so back up weekly to Google Drive or email.</div>
     <button class="btn primary block" data-act="backup" style="margin-top:12px">Download backup</button>
-    <label class="btn block" style="cursor:pointer">Restore from backup<input type="file" accept=".json" data-act="restore" hidden></label></div>
+    <label class="btn block" style="cursor:pointer">Restore from backup<input type="file" data-act="restore" hidden></label></div>
     <div class="card"><h3>Import from Garmin & Hevy</h3><div class="tiny muted">Re-importing the same file is safe; entries merge by date and time.</div>
-    <label class="btn block sm" style="cursor:pointer;margin-top:10px">Garmin activities CSV<input type="file" accept=".csv" data-act="impgarmin" hidden></label>
-    <label class="btn block sm" style="cursor:pointer">Garmin sleep CSV<input type="file" accept=".csv" data-act="impsleep" hidden></label>
-    <label class="btn block sm" style="cursor:pointer">Hevy workouts CSV<input type="file" accept=".csv" data-act="imphevy" hidden></label>
+    <label class="btn block sm" style="cursor:pointer;margin-top:10px">Garmin activities CSV<input type="file" data-act="impgarmin" hidden></label>
+    <label class="btn block sm" style="cursor:pointer">Garmin sleep CSV<input type="file" data-act="impsleep" hidden></label>
+    <label class="btn block sm" style="cursor:pointer">Hevy workouts CSV<input type="file" data-act="imphevy" hidden></label>
     <label class="l">Resting HR (paste the weekly table from Garmin Connect)</label><textarea class="f" id="rhr-paste" placeholder="29 Sep - 5 Oct    47 bpm    120 bpm"></textarea><button class="btn block sm" data-act="imprhr" style="margin-top:8px">Import resting HR</button></div>
     <div class="card"><button class="btn danger block" data-act="wipe">Erase everything on this phone</button></div>`;
 }
