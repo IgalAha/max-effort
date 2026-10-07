@@ -555,3 +555,95 @@ export function nextWeekAdvice({ week, recovery, lm, creeps, report, prevReport 
   if (!out.length) out.push('Continue the plan as written.');
   return out;
 }
+
+// ---------------- ANALYTICS ----------------
+// Sessions of a lift group (several keys can share one name) in date order, with each session's best set.
+function groupSessions(workouts, keys, bodyweight) {
+  const out = [];
+  for (const w of workouts) {
+    for (const e of w.exercises) {
+      if (!keys.has(e.key) || !workSets(e).length) continue;
+      const b = sessionBest(e, bodyweight, !!(EXERCISES[e.key] || {}).bodyweight);
+      if (b) out.push({ date: w.date, best: b, maxW: Math.max(...workSets(e).map((s) => s.weight || 0)), ex: e });
+    }
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// Per lift: current e1RM (best of the last two sessions) vs about 4 and 12 weeks ago.
+export function liftTrends({ workouts, groups, today, bodyweight = 0, minRecent = 120 }) {
+  const rows = [];
+  for (const g of groups) {
+    const ss = groupSessions(workouts, g.keys, bodyweight);
+    if (ss.length < 2 || daysBetween(ss[ss.length - 1].date, today) > minRecent) continue;
+    const cur = ss.slice(-2).reduce((a, s) => (s.best.e1rm > a.best.e1rm ? s : a));
+    const inWin = (from, to) => ss.filter((s) => { const d = daysBetween(s.date, today); return d >= from && d <= to; });
+    const bestOf = (a) => (a.length ? Math.max(...a.map((s) => s.best.e1rm)) : null);
+    const b4 = bestOf(inWin(21, 42)); const b12 = bestOf(inWin(70, 105));
+    const pct = (b) => (b ? round1(((cur.best.e1rm - b) / b) * 100) : null);
+    const p4 = pct(b4);
+    const allBest = Math.max(...ss.map((x) => x.best.e1rm)); const bestAt = ss.find((x) => x.best.e1rm === allBest).date;
+    rows.push({ allBest, bestAt, pctBest: round1(((cur.best.e1rm - allBest) / allBest) * 100), compound: [...g.keys].some((k) => (EXERCISES[k] || {}).compound), name: g.name, keys: g.keys, e1rm: cur.best.e1rm, estimated: cur.best.estimated, date: cur.date, sessions: ss.length,
+      ago4: b4, pct4: p4, ago12: b12, pct12: pct(b12), trend: p4 == null ? 'new' : p4 >= 1 ? 'up' : p4 <= -3 ? 'down' : 'flat' });
+  }
+  return rows;
+}
+
+// Personal records since a date: best-ever estimated 1RM, or heaviest weight ever lifted for that lift.
+// Needs two earlier sessions so the first few logs don't all count as records.
+export function prList({ workouts, groups, since, bodyweight = 0 }) {
+  const out = [];
+  for (const g of groups) {
+    const ss = groupSessions(workouts, g.keys, bodyweight);
+    let bestE = 0; let bestW = 0;
+    ss.forEach((s, i) => {
+      if (i >= 2 && s.date >= since) {
+        if (s.best.e1rm > bestE + 0.4) out.push({ date: s.date, name: g.name, kind: 'e1RM', value: s.best.e1rm, prev: round1(bestE), set: `${s.best.weight} × ${s.best.reps}`, estimated: s.best.estimated });
+        else if (s.maxW > bestW) out.push({ date: s.date, name: g.name, kind: 'Heaviest', value: s.maxW, prev: bestW });
+      }
+      bestE = Math.max(bestE, s.best.e1rm); bestW = Math.max(bestW, s.maxW);
+    });
+  }
+  return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+// Working sets per muscle in [from, to]: the exercise's first muscle counts 1 set, the others ½.
+export function muscleSets(workouts, from, to) {
+  const res = {};
+  for (const w of workouts) {
+    if (w.date < from || w.date > to) continue;
+    for (const e of w.exercises) {
+      const ms = (EXERCISES[e.key] || {}).muscles || [];
+      const n = workSets(e).length;
+      ms.forEach((m, i) => { res[m] = (res[m] || 0) + n * (i === 0 ? 1 : 0.5); });
+    }
+  }
+  return res;
+}
+
+// Weekly consistency and effort: sessions done vs planned, skips, and how far logged RPE sits from target.
+export function consistencyWeeks({ workouts, cardio, skips = [], weekStartDay, weeks = 8, plannedPerWeek }) {
+  const rows = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const ws = addDays(weekStartDay, -7 * i); const we = addDays(ws, 6);
+    const inW = (d) => d >= ws && d <= we;
+    const strength = strengthSessions(workouts, cardio).filter((x) => inW(x.date)).length;
+    const endurance = cardio.filter((c) => inW(c.date) && ['run', 'mtb', 'ride'].includes(c.type)).length;
+    const skipped = skips.filter((k) => inW(k.date)).length;
+    const diffs = []; let sets = 0;
+    for (const w of workouts.filter((x) => inW(x.date))) {
+      for (const e of w.exercises) {
+        const m = EXERCISES[e.key]; if (!m) continue;
+        const target = w.planRef && w.planRef.week === 4 ? Math.min(m.rpe || 8, 7) : (m.rpe || 8);
+        for (const s of workSets(e)) { sets++; if (s.rpe != null) diffs.push(s.rpe - target); }
+      }
+    }
+    const done = strength + endurance;
+    rows.push({ weekStart: ws, strength, endurance, done, planned: plannedPerWeek, skipped,
+      rpeVsTarget: diffs.length ? round1(mean(diffs)) : null, rpeLoggedPct: sets ? Math.round((diffs.length / sets) * 100) : null, sets });
+  }
+  // streak of full weeks (current week excluded) at ≥80% of planned sessions
+  let streak = 0;
+  for (let i = rows.length - 2; i >= 0; i--) { if (rows[i].done >= Math.round(rows[i].planned * 0.8)) streak++; else break; }
+  return { rows, streak };
+}

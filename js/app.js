@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.7.5';
+const APP_VERSION = '9.8';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -1251,8 +1251,68 @@ function loadCard(ctx) {
   return h;
 }
 
+// ---------- INSIGHTS ----------
+const sgn = (v, unit = '') => (v == null ? '–' : `${v > 0 ? '▲ +' : v < 0 ? '▼ ' : ''}${v}${unit}`);
+const trendCls = (v, up = 1, down = -3) => (v == null ? 'faint' : v >= up ? 'up' : v <= down ? 'down' : 'muted');
+function goalBar(label, cur, target, note) {
+  const pct = cur ? Math.round((cur / target) * 100) : 0;
+  return `<div class="goal"><div class="row between"><span class="small b">${esc(label)}</span><span class="small">${cur ? `<b>${pct}%</b> <span class="muted">· ${n1(cur)} of ${Math.round(target)} kg</span>` : '<span class="muted">no data yet</span>'}</span></div>
+    <div class="gtrack" role="img" aria-label="${esc(label)}: ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></div>${note ? `<div class="tiny faint">${note}</div>` : ''}</div>`;
+}
+function insightsView(ctx) {
+  const bw = S.settings.bodyweight; const t = ctx.t;
+  const groups = liftGroups();
+  let h = '';
+  // --- Lift progress
+  const rows = E.liftTrends({ workouts: S.data.workouts, groups, today: t, bodyweight: bw });
+  const planRows = rows.filter((r) => groups.find((g) => g.name === r.name && g.plan));
+  const shown = (planRows.length ? planRows : rows).slice().sort((a, b) => (b.compound - a.compound) || (b.sessions - a.sessions)).slice(0, 12);
+  const squat = rows.find((r) => r.keys.has('squat'));
+  const flat = rows.find((r) => /(^|\s)bench press|flat bench/i.test(r.name) && !/incline|decline/i.test(r.name));
+  const bench = flat || rows.find((r) => r.keys.has('incline_press'));
+  h += `<div class="card"><h3>Lift progress</h3>
+    ${goalBar('Squat → 2× body weight', squat && squat.e1rm, bw * 2)}
+    ${goalBar(`${flat ? 'Bench' : 'Incline press'} → 1.7× body weight`, bench && bench.e1rm, bw * 1.7, flat ? '' : 'No flat bench logged, so this uses your incline press, which usually runs lower than flat.')}
+    ${shown.length ? `<table class="t" style="margin-top:10px"><tr><th>Lift</th><th class="n">e1RM</th><th class="n">vs 4 wk</th><th class="n">vs 12 wk</th><th class="n">vs best</th></tr>
+    ${shown.map((r) => `<tr data-act="insightlift" data-name="${esc(r.name)}" style="cursor:pointer"><td>${esc(r.name)}</td><td class="n">${n1(r.e1rm)}${r.estimated ? '*' : ''}</td><td class="n ${trendCls(r.pct4)}">${sgn(r.pct4, '%')}</td><td class="n ${trendCls(r.pct12)}">${sgn(r.pct12, '%')}</td><td class="n ${r.pctBest >= 0 ? 'up' : 'muted'}" title="Best ${n1(r.allBest)} kg on ${fmtDate(r.bestAt)}">${r.pctBest >= 0 ? '★ best' : `${r.pctBest}%`}</td></tr>`).join('')}</table>
+    <div class="tiny faint" style="margin-top:6px">e1RM = estimated 1-rep max (kg) from your best set in the last two sessions. ▲ up 1%+, ▼ down 3%+, – not trained then. “vs best” compares with your best ever. * no RPE logged, so it may read low. Tap a lift for its chart.</div>`
+    : '<div class="muted small" style="margin-top:10px">Log a lift at least twice to see its trend.</div>'}</div>`;
+  // --- PRs
+  const prs = E.prList({ workouts: S.data.workouts, groups, since: E.addDays(t, -56), bodyweight: bw }).slice(0, 10);
+  h += `<div class="card"><h3>Personal records · last 8 weeks</h3>
+    ${prs.length ? `<ul class="clean">${prs.map((p) => `<li class="row between"><span><b>${esc(p.name)}</b><br><span class="tiny muted">${fmtDate(p.date)}${p.set ? ` · best set ${esc(p.set)}` : ''}</span></span><span class="small" style="text-align:right">${p.kind === 'e1RM' ? `e1RM <b>${n1(p.value)}</b>` : `Heaviest <b>${n1(p.value)}</b>`} kg<br><span class="tiny muted">was ${n1(p.prev)}</span></span></li>`).join('')}</ul>`
+    : '<div class="muted small">No new records in the last 8 weeks.</div>'}</div>`;
+  // --- Sets per muscle
+  const ws = E.weekStartOf(t, S.settings.weekStart);
+  const cur = E.muscleSets(S.data.workouts, ws, E.addDays(ws, 6));
+  const past = [1, 2, 3, 4].map((i) => E.muscleSets(S.data.workouts, E.addDays(ws, -7 * i), E.addDays(ws, -7 * i + 6)));
+  const avg = (m) => Math.round((past.reduce((a, x) => a + (x[m] || 0), 0) / 4) * 2) / 2;
+  const MAX = 25; const LO = 10; const HI = 20;
+  h += `<div class="card"><h3>Weekly sets per muscle</h3><div class="tiny muted" style="margin-bottom:8px">Bar = average of the last 4 full weeks · ▏= this week so far · shaded zone = 10–20 sets</div>
+    ${MUSCLES.map((m) => { const a = avg(m); const c = cur[m] || 0; const st = a < LO ? ['Low', 'lo'] : a > HI ? ['High', 'hi'] : ['OK', 'ok'];
+      return `<div class="mrow" title="${esc(m)}: ${a} avg, ${c} this week"><span class="mname">${esc(m)}</span><span class="mtrack"><span class="band" style="left:${(LO / MAX) * 100}%;width:${((HI - LO) / MAX) * 100}%"></span><i style="width:${Math.min(100, (a / MAX) * 100)}%"></i><b style="left:${Math.min(99, (c / MAX) * 100)}%"></b></span><span class="mval">${n1(a)} <span class="faint">/ ${n1(c)}</span></span><span class="mst ${st[1]}">${st[0]}</span></div>`; }).join('')}
+    <div class="tiny faint" style="margin-top:8px">Working sets; an exercise's main muscle counts 1 set, helper muscles ½. 10–20 hard sets a week is a common range for growth. Numbers: 4-week avg / this week.</div></div>`;
+  // --- Consistency & effort
+  const planned = DAYS.filter((d) => d.type !== 'rest').length;
+  const cw = E.consistencyWeeks({ workouts: S.data.workouts, cardio: S.data.cardio, skips: S.skips || [], weekStartDay: ws, weeks: 8, plannedPerWeek: planned });
+  const last4 = cw.rows.slice(-5, -1);
+  const rv = last4.map((r) => r.rpeVsTarget).filter((v) => v != null);
+  const rpeAvg = rv.length ? Math.round((rv.reduce((a, v) => a + v, 0) / rv.length) * 10) / 10 : null;
+  const setsT = last4.reduce((a, r) => a + r.sets, 0); const logged = last4.reduce((a, r) => a + Math.round(((r.rpeLoggedPct || 0) * r.sets) / 100), 0);
+  const thisW = cw.rows[cw.rows.length - 1];
+  const mxS = Math.max(planned, ...cw.rows.map((r) => r.done), 1);
+  h += `<div class="card"><h3>Consistency & effort</h3>
+    <div class="stats" style="margin:10px 0 12px"><div class="stat"><span>This week</span><b>${thisW.done}/${planned}</b></div><div class="stat"><span>Streak</span><b>${cw.streak} wk</b></div><div class="stat"><span>RPE vs target</span><b>${rpeAvg == null ? '–' : `${rpeAvg > 0 ? '+' : ''}${rpeAvg}`}</b></div></div>
+    <div class="wkbars" role="img" aria-label="Sessions per week, last 8 weeks">${cw.rows.map((r, i) => `<div class="wk ${i === cw.rows.length - 1 ? 'cur' : ''}" title="Week of ${fmtDate(r.weekStart)}: ${r.strength} strength + ${r.endurance} cardio = ${r.done} of ${r.planned}${r.skipped ? `, ${r.skipped} skipped` : ''}${r.rpeVsTarget != null ? `, RPE ${r.rpeVsTarget > 0 ? '+' : ''}${r.rpeVsTarget} vs target` : ''}">
+      <span class="v">${r.done}</span><span class="col"><span class="plan" style="bottom:${(r.planned / mxS) * 100}%"></span><i style="height:${(r.done / mxS) * 100}%"></i></span><span class="d">${new Date(E.toDay(r.weekStart) * 86400000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })}</span><span class="s">${r.skipped ? `${r.skipped} skip` : ''}</span></div>`).join('')}</div>
+    <div class="tiny muted" style="margin-top:6px">Sessions per week (strength + runs/rides). Dashed line = your plan (${planned}). Streak = full weeks in a row at 80%+ of plan.</div>
+    <div class="small" style="margin-top:10px">${rpeAvg == null ? 'Log RPE on your sets to see effort vs target.' : rpeAvg > 0.5 ? `Your sets run <b>${rpeAvg} RPE above target</b> on average over 4 weeks: you're training harder than planned. Watch fatigue.` : rpeAvg < -0.75 ? `Your sets run <b>${Math.abs(rpeAvg)} RPE under target</b> over 4 weeks: there's room to push loads.` : 'Effort is <b>on target</b> over the last 4 weeks.'}
+    ${setsT ? ` RPE logged on ${Math.round((logged / setsT) * 100)}% of sets.` : ''}</div></div>`;
+  return h;
+}
+
 function progressView(ctx) {
-  let h = `<div class="seg">${[['lifts', 'Lifts'], ['training', 'Training'], ['coach', 'Coach']].map(([v, l]) => `<button data-act="progseg" data-v="${v}" class="${S.progSeg === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  let h = `<div class="seg">${[['lifts', 'Lifts'], ['insights', 'Insights'], ['training', 'Training'], ['coach', 'Coach']].map(([v, l]) => `<button data-act="progseg" data-v="${v}" class="${S.progSeg === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   if (S.progSeg === 'lifts') {
     const groups = liftGroups();
     if (!groups.length) return h + '<div class="card muted">No lifts logged yet.</div>';
@@ -1272,6 +1332,7 @@ function progressView(ctx) {
       ${hist.slice(-10).reverse().map((x) => { const b = E.sessionBest(x.ex, S.settings.bodyweight, !!m.bodyweight); const r = E.workSets(x.ex).map((s) => s.rpe).filter((v) => v != null); return `<tr><td>${fmtDate(x.date)}</td><td>${b ? `${n1(b.weight)} × ${b.reps}` : '–'}</td><td class="n">${r.length ? n1(r.reduce((a, c) => a + c, 0) / r.length) : '–'}</td><td class="n">${Math.round(E.volumeLoad(x.ex))}</td></tr>`; }).join('')}</table></div>`;
     return h;
   }
+  if (S.progSeg === 'insights') return h + insightsView(ctx);
   if (S.progSeg === 'training') {
     const ws = E.weekStartOf(ctx.t, S.settings.weekStart);
     const weeks = [];
@@ -1283,10 +1344,7 @@ function progressView(ctx) {
       h += `<div class="card"><div class="row between"><h3>Recent runs</h3><span class="tiny muted">easy ≤ ${easyCeil()} bpm</span></div><table class="t" style="margin-top:6px"><tr><th>Date</th><th class="n">km</th><th class="n">Pace</th><th class="n">HR</th></tr>
         ${runs.map((r) => { const p = r.durationMin / r.distanceKm; return `<tr><td>${fmtDate(r.date)}</td><td class="n">${n1(r.distanceKm)}</td><td class="n">${Math.floor(p)}:${String(Math.round((p % 1) * 60)).padStart(2, '0')}</td><td class="n" style="${r.avgHr > easyCeil() ? 'color:var(--warn)' : ''}">${r.avgHr ?? '–'}</td></tr>`; }).join('')}</table></div>`;
     }
-    const cur = weeks[9]; const prev = weeks[8];
-    const mx = Math.max(10, ...MUSCLES.map((x) => Math.max(cur.setsByMuscle[x] || 0, prev.setsByMuscle[x] || 0)));
-    h += `<div class="card"><h3>Working sets per muscle</h3><div class="tiny muted" style="margin-bottom:6px">This week (last week in brackets)</div>
-      ${MUSCLES.map((x) => `<div class="hbar"><span>${x}</span><span class="t"><i style="width:${((cur.setsByMuscle[x] || 0) / mx) * 100}%"></i></span><span class="tiny" style="text-align:right">${cur.setsByMuscle[x] || 0} <span class="faint">(${prev.setsByMuscle[x] || 0})</span></span></div>`).join('')}</div>`;
+    h += '<div class="tiny muted" style="text-align:center">Sets per muscle, PRs and consistency are under <b>Insights</b>.</div>';
     return h;
   }
   // coach
@@ -1580,6 +1638,7 @@ document.addEventListener('click', async (e) => {
     case 'resetplan': if (confirm('Replace your edited plan with the original 5-week block?')) { resetPlan(); splitShared(todayStr()); await setMeta('plan', exportPlan()); toast('Plan reset.'); render(); } break;
     // progress / me
     case 'progseg': S.progSeg = t.dataset.v; render(); window.scrollTo(0, 0); break;
+    case 'insightlift': S.progSeg = 'lifts'; S.trendKey = t.dataset.name; render(); window.scrollTo(0, 0); break;
     case 'meseg': S.meSeg = t.dataset.v; render(); window.scrollTo(0, 0); break;
     case 'install':
       if (installPrompt) { installPrompt.prompt(); const r = await installPrompt.userChoice; installPrompt = null; if (r.outcome === 'accepted') toast('Installing… find Max Effort in your app drawer.'); render(); }
