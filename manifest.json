@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "Max Effort",
+  "short_name": "Max Effort",
+  "description": "Strength, running and MTB training log with progression and recovery coaching.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1114",
+  "theme_color": "#0f1114",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
