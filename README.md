@@ -1,4 +1,4 @@
-# Max Effort — v9.8
+# Max Effort — v9.9
 
 Personal training app for strength, running and MTB: Hevy-style workout logger with RPE-based progression,
 editable 5-week plan, Garmin-based activity feed and training load, recovery status, injury log and a coach packet
@@ -116,6 +116,18 @@ Load steps: 2.5 kg for barbell and dumbbell lifts, 0.5 kg for the cable lateral 
 
 ## Changes in v9.5
 - Log cardio › Counts as: lists every cardio day of the week. Skipped days show "(was skipped)"; logging one marks it done and removes the skip. Defaults to the earliest open or skipped cardio day.
+
+## Changes in v9.9
+- Deload rule: Week 5 is built from Week 4.
+  - Lighter: same sets and reps at 72.5% of the weight.
+  - Less volume: about half the sets at 90% of the weight.
+  - Manual: your own Week 5 numbers.
+  - Set it in Plan › Manage plan.
+- Next block: when Week 5 rolls over to Week 1, Home asks you to review the next block's loads.
+  - Each exercise moves with its change in estimated max over the block (weeks 3–4 vs 1–2), capped at +5%.
+  - A grinding peak week repeats the block; a drop of 3% or more resets 5% lighter.
+  - Light isolation lifts get +1 rep instead.
+  - All five weeks move together, and it can be undone.
 
 ## Changes in v9.8
 - Progress › Insights:

@@ -1,5 +1,5 @@
 // Offline layer. The app shell must cache for install/offline to work; optional files (your data seed) never block it.
-const CACHE = 'max-effort-v9-8';
+const CACHE = 'max-effort-v9-9';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'css/styles.css',
   'js/app.js', 'js/engine.js', 'js/plan.js', 'js/db.js', 'js/importers.js', 'js/coach_prompt.js', 'js/export.js'];
 const OPTIONAL = ['data/seed.json'];

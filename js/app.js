@@ -1,12 +1,12 @@
 // Max Effort — UI. All coaching math lives in engine.js; this file only renders and stores.
 import { db, getMeta, setMeta } from './db.js';
-import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
+import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, weekGroups, PLAN_OPTS, DELOAD_RULES, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
 import * as E from './engine.js';
 import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.js';
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.8';
+const APP_VERSION = '9.9';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -49,8 +49,8 @@ const retreat = (p) => (p.dayIdx <= 0 ? { week: (p.week + 4) % 5, dayIdx: lastId
 function setPos(n, from = pos()) {
   const b = S.settings.blocks || (S.settings.blocks = []);
   const today = todayStr();
-  if (from.week === 4 && n.week === 0) { if (b[b.length - 1] !== today) b.push(today); }
-  else if (from.week === 0 && n.week === 4 && b.length > 1 && E.daysBetween(b[b.length - 1], today) <= 14) b.pop();
+  if (from.week === 4 && n.week === 0) { if (b[b.length - 1] !== today) { S.settings.pendingProgress = { blockStart: b[b.length - 1], end: E.addDays(today, -1), n: b.length }; b.push(today); } }
+  else if (from.week === 0 && n.week === 4 && b.length > 1 && E.daysBetween(b[b.length - 1], today) <= 14) { b.pop(); S.settings.pendingProgress = null; }
   S.settings.week = n.week; S.settings.dayIdx = n.dayIdx;
 }
 // Which plan days are done or skipped in the current week. The "next" day is the first day from the current
@@ -115,6 +115,7 @@ async function loadAll() {
   S.draft = await getMeta('draft', null);
   S.lastBackup = await getMeta('lastBackup', null);
   S.skips = await getMeta('skips', []);
+  S.planBeforeProgress = await getMeta('planBeforeProgress', null);
   const plan = await getMeta('plan', null);
   if (plan) loadPlan(plan);
   if (splitShared(todayStr())) await setMeta('plan', exportPlan());
@@ -209,7 +210,8 @@ function render() {
     else if (S.cardioForm) { back = 'cardioback'; title = 'Log cardio'; body = cardioForm(ctx); }
     else body = startView(ctx);
   } else if (S.tab === 'plan') {
-    if (S.splitOrder) { back = 'orddone'; title = 'Split order'; body = splitOrderView(); }
+    if (S.progView) { back = 'progback'; title = 'Next block'; body = nextBlockView(); }
+    else if (S.splitOrder) { back = 'orddone'; title = 'Split order'; body = splitOrderView(); }
     else if (S.editEx) { back = 'exback'; title = 'Exercise'; body = exerciseEditor(); }
     else if (S.editDay != null) { back = 'dayback'; title = 'Edit day'; body = dayEditor(); }
     else body = planView();
@@ -264,6 +266,7 @@ function homeView(ctx) {
   const daysSince = S.lastBackup ? E.daysBetween(S.lastBackup.slice(0, 10), ctx.t) : null;
   if (daysSince == null || daysSince > 14) h += `<div class="callout warn" style="margin:0 0 12px">${daysSince == null ? 'No backup yet.' : `Last backup ${daysSince} days ago.`} Your log lives only on this phone. <button class="linkbtn" data-act="gobackup" style="padding:0;color:inherit;text-decoration:underline">Back up now</button></div>`;
 
+  if (S.settings.pendingProgress && !S.settings.pendingProgress.snoozed) h += `<div class="callout info" style="margin:0 0 12px"><b>Block ${S.settings.pendingProgress.n} is done.</b> Review how your loads move up for this block. <button class="btn primary sm block" data-act="progopen" style="margin-top:8px">Review next block</button></div>`;
   if (installPrompt && !isStandalone()) h += '<div class="callout info row between" style="margin:0 0 12px"><span>Install Max Effort as an app on this phone.</span><button class="btn primary sm" data-act="install">Install</button></div>';
   // Today
   S.shownDay = ctx.t;
@@ -402,6 +405,64 @@ function checkinCard(c, compact) {
 function athleteInfo() {
   const st = S.settings;
   return { ageYears: st.birthYear ? new Date().getFullYear() - st.birthYear : 'not set', heightCm: st.heightCm ?? 'not set', bodyweightKg: st.bodyweight };
+}
+
+// ---------- NEXT BLOCK ----------
+function progRange() {
+  const pp = S.settings.pendingProgress;
+  if (pp) return { from: pp.blockStart, to: pp.end, done: true, n: pp.n };
+  return { from: currentBlockStart() || E.addDays(todayStr(), -35), to: todayStr(), done: false, n: (S.settings.blocks || []).length || 1 };
+}
+// Apply a % change to one exercise in every week. If the change is smaller than one weight step (light isolation
+// work), add one rep to each working row instead.
+function progressExercise(ex, pct, step, apply) {
+  const f = 1 + pct / 100;
+  const top = Math.max(0, ...ex.weeks[0].map((g) => g.weight || 0));
+  const repsMode = pct > 0 && top * (pct / 100) < step / 2;
+  const before = groupsTxtRows(ex.weeks[0]);
+  const weeks = ex.weeks.map((wk) => wk.map((g) => {
+    if (repsMode) return { ...g, reps: g.reps + 1 };
+    if (!g.weight) return { ...g };
+    let nw = E.roundTo(g.weight * f, step);
+    if (pct > 0 && nw <= g.weight && g.weight > 0) nw = g.weight + step;
+    if (pct < 0 && nw >= g.weight) nw = Math.max(step, g.weight - step);
+    return { ...g, weight: Math.round(nw * 100) / 100 };
+  }));
+  const after = groupsTxtRows(weeks[0]);
+  if (apply) { ex.weeks = weeks; if (ex.warm && !repsMode && pct) ex.warm.weight = Math.max(step, E.roundTo(ex.warm.weight * f, step)); }
+  return { before, after, repsMode };
+}
+const groupsTxtRows = (rows) => rows.map((g) => `${g.sets}×${g.reps} @ ${g.weight}`).join(' · ');
+function nextBlockView() {
+  const r = progRange();
+  const rows = E.blockProgression({ workouts: S.data.workouts, days: DAYS, blockStart: r.from, end: r.to, bodyweight: S.settings.bodyweight });
+  let h = `<div class="card"><div class="eyebrow">${r.done ? `Block ${r.n} finished` : `Block ${r.n} so far (not finished)`}</div><div class="b" style="font-size:18px;margin:4px 0">Next block, Week 1 loads</div>
+    <div class="small muted">From ${fmtDate(r.from)} to ${fmtDate(r.to)}. Each lift moves with your estimated max over the block (best of weeks 3–4 vs weeks 1–2), up to +5% per block. A grinding peak week repeats the block; a clear drop resets 5% lighter. Weeks 2–5 move by the same amount, so the wave stays the same.</div></div>`;
+  let lastDay = -1;
+  for (const x of rows) {
+    const ex = DAYS[x.dayIdx].exercises[x.k];
+    const pv = progressExercise(JSON.parse(JSON.stringify(ex)), x.pct, x.step, false);
+    if (x.dayIdx !== lastDay) { h += `<h2>${esc(DAYS[x.dayIdx].name)} · ${esc(DAYS[x.dayIdx].title)}</h2>`; lastDay = x.dayIdx; }
+    const tag = x.pct > 0 ? `<span class="tag up">${pv.repsMode ? '+1 rep' : `+${x.pct}%`}</span>` : x.pct < 0 ? `<span class="tag down">${x.pct}%</span>` : '<span class="tag">same</span>';
+    h += `<div class="card"><div class="row between"><b>${esc(x.name)}</b>${tag}</div>
+      ${x.pct ? `<div class="small" style="margin-top:6px"><span class="muted">W1</span> ${esc(pv.before)} → <b>${esc(pv.after)}</b> kg</div>` : `<div class="small muted" style="margin-top:6px">W1 ${esc(pv.before)} kg</div>`}
+      <div class="tiny muted" style="margin-top:4px">${esc(x.why)}</div></div>`;
+  }
+  h += `<button class="btn primary block" data-act="progapply">Apply to my plan</button>
+    <button class="btn block" data-act="progback" style="margin-top:8px">${r.done ? 'Not now' : 'Close'}</button>
+    <div class="tiny faint" style="margin:10px 0;text-align:center">You can undo this from Plan › Manage plan. Check-ins, pain and recovery still adjust each session on the day.</div>`;
+  return h;
+}
+async function applyNextBlock() {
+  const r = progRange();
+  const rows = E.blockProgression({ workouts: S.data.workouts, days: DAYS, blockStart: r.from, end: r.to, bodyweight: S.settings.bodyweight });
+  S.planBeforeProgress = exportPlan(); await setMeta('planBeforeProgress', S.planBeforeProgress);
+  let n = 0;
+  for (const x of rows) if (x.pct) { progressExercise(DAYS[x.dayIdx].exercises[x.k], x.pct, x.step, true); n++; }
+  await setMeta('plan', exportPlan());
+  S.settings.pendingProgress = null; await saveSettings();
+  S.progView = false; render(); window.scrollTo(0, 0);
+  toast(n ? `Next block set: ${n} exercise${n > 1 ? 's' : ''} progressed.` : 'No changes: loads stay the same.');
 }
 
 // ---------- DAY STATUS ----------
@@ -979,12 +1040,14 @@ function planView() {
       if (d.type !== 'strength') { h += `<div class="card"><div class="row between"><div><div class="b">${esc(d.name)}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div></div>`; return; }
       h += `<div class="card"><div class="row between"><div class="b" style="font-size:17px">${esc(d.name)}</div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div>`;
       d.exercises.forEach((ex) => {
-        h += `<div class="pex"><div class="nm">${esc((metaOf(ex.id) || { name: ex.id }).name)}</div>${ex.weeks.map((grps, w) => `<div class="wkline ${w === p.week ? 'cur' : ''}"><span>W${w + 1}</span><span>${grps.map((g) => `${g.sets}×${g.reps} @ ${g.weight}`).join(' · ')}</span></div>`).join('')}</div>`;
+        h += `<div class="pex"><div class="nm">${esc((metaOf(ex.id) || { name: ex.id }).name)}</div>${[0, 1, 2, 3, 4].map((w) => [weekGroups(ex, w), w]).map(([grps, w]) => `<div class="wkline ${w === p.week ? 'cur' : ''}"><span>W${w + 1}</span><span>${grps.map((g) => `${g.sets}×${g.reps} @ ${g.weight}`).join(' · ')}</span></div>`).join('')}</div>`;
       });
       h += '</div>';
     });
   }
-  h += `<h2>Manage plan</h2><div class="card"><button class="btn primary block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
+  h += `<h2>Manage plan</h2><div class="card"><label class="l" style="margin-top:0" for="deloadrule">Deload week (W5)</label><select class="f" id="deloadrule" data-act="deloadrule">${Object.entries(DELOAD_RULES).map(([k, r]) => `<option value="${k}" ${PLAN_OPTS.deload === k ? 'selected' : ''}>${esc(r.label)}: ${esc(r.desc)}</option>`).join('')}</select>
+    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}</div>
+    <div class="card"><button class="btn primary block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
     <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" data-act="importplan" hidden></label></div>
     <button class="btn danger block sm" data-act="resetplan">Reset to original plan</button></div>`;
   return h;
@@ -1009,12 +1072,18 @@ function dayEditor() {
         <button class="icon-btn" data-act="exup" data-k="${k}" aria-label="Move up">↑</button><button class="icon-btn" data-act="exdown" data-k="${k}" aria-label="Move down">↓</button><button class="icon-btn" data-act="exdel" data-k="${k}" aria-label="Remove" style="color:var(--bad)">✕</button></div>
         <div class="edhead"><span>SETS</span><span></span><span>REPS</span><span></span><span>KG</span><span></span></div>`;
       if (ex.warm) h += `<div class="edrow"><span class="b" style="text-align:center;color:var(--warn);font-size:14px">Warm</span><span></span><input inputmode="numeric" data-pf="wreps" data-k="${k}" value="${ex.warm.reps}"><span class="x">@</span><input inputmode="decimal" data-pf="wweight" data-k="${k}" value="${ex.warm.weight}"><button class="icon-btn" data-act="warmdel" data-k="${k}" aria-label="Remove warm-up">✕</button></div>`;
+      if (w === 4 && PLAN_OPTS.deload !== 'manual') {
+        h += `<div class="small" style="padding:8px 2px">${weekGroups(ex, 4).map((g) => `${g.sets}×${g.reps} @ ${g.weight} kg`).join(' · ')}</div>`;
+        h += `</div>`;
+        return;
+      }
       ex.weeks[w].forEach((g, gi) => {
         h += `<div class="edrow"><input inputmode="numeric" data-pf="sets" data-k="${k}" data-g="${gi}" value="${g.sets}" aria-label="Sets"><span class="x">×</span><input inputmode="numeric" data-pf="reps" data-k="${k}" data-g="${gi}" value="${g.reps}" aria-label="Reps"><span class="x">@</span><input inputmode="decimal" data-pf="weight" data-k="${k}" data-g="${gi}" value="${g.weight}" aria-label="Kilograms"><button class="icon-btn" data-act="grpdel" data-k="${k}" data-g="${gi}" aria-label="Remove row">✕</button></div>`;
       });
       h += `<div class="row wrap" style="margin-top:10px"><button class="btn sm" data-act="grpadd" data-k="${k}">+ Row</button>${ex.warm ? '' : `<button class="btn sm" data-act="warmadd" data-k="${k}">+ Warm-up</button>`}<button class="btn sm" data-act="copyweeks" data-k="${k}">Copy to all weeks</button></div></div>`;
     });
     h += '<button class="btn ghost block" data-act="planaddex">+ Add exercise</button>';
+    if (w === 4 && PLAN_OPTS.deload !== 'manual') h += `<div class="callout info" style="margin:10px 0">Week 5 is your deload and is built automatically from Week 4 (${esc(DELOAD_RULES[PLAN_OPTS.deload].desc)}). To type your own numbers, set the deload rule to Manual in Plan › Manage plan.</div>`;
     h += `<div class="tiny faint" style="margin:10px 0">Rows are edited for Week ${w + 1} only. Warm-ups apply to every week. Changes save automatically.</div>`;
   }
   h += '<button class="btn danger block" data-act="daydel" style="margin-top:12px">Delete this day</button>';
@@ -1629,6 +1698,10 @@ document.addEventListener('click', async (e) => {
     case 'planaddex': S.picker = { mode: 'plan' }; S.pickQ = ''; renderOverlay(); setTimeout(() => $('#pk-q') && $('#pk-q').focus(), 50); break;
     case 'daymove': { const n = S.editDay + +t.dataset.v; if (n >= 0 && n < DAYS.length) { const from = S.editDay; await reorderDays(() => moveDay(from, n)); S.editDay = n; render(); } break; }
     case 'ordopen': S.splitOrder = true; render(); window.scrollTo(0, 0); break;
+    case 'progopen': S.tab = 'plan'; S.progView = true; S.editDay = null; S.editEx = null; render(); window.scrollTo(0, 0); break;
+    case 'progback': S.progView = false; if (S.settings.pendingProgress && S.settings.pendingProgress.snoozed !== true) { S.settings.pendingProgress.snoozed = true; await saveSettings(); } render(); window.scrollTo(0, 0); break;
+    case 'progapply': await applyNextBlock(); break;
+    case 'progundo': if (S.planBeforeProgress && confirm('Put your plan back to how it was before the last block progression?')) { loadPlan(S.planBeforeProgress); await setMeta('plan', exportPlan()); S.planBeforeProgress = null; await setMeta('planBeforeProgress', null); render(); toast('Plan restored.'); } break;
     case 'orddone': S.splitOrder = false; render(); break;
     case 'ordmove': { const from = i; const to = i + +t.dataset.v; await reorderDays(() => moveDay(from, to)); render(); break; }
     case 'addtyped': { const ty = t.dataset.v; await reorderDays(() => DAYS.push({ id: `D${Date.now()}`, name: ty === 'rest' ? 'Rest' : ty === 'cardio' ? 'Cardio' : 'New lifting day', type: ty, title: ty === 'rest' ? 'Active recovery / rest' : ty === 'cardio' ? 'Easy run or ride' : 'New session', note: ty === 'rest' ? 'Walk, mobility, nothing taxing.' : ty === 'cardio' ? '~1 hour, easy.' : '', exercises: [] })); render(); toast('Added at the end. Move it into place with the arrows.'); break; }
@@ -1731,6 +1804,7 @@ document.addEventListener('change', async (e) => {
     toast(`${DAYS[i].name} marked done.`); render(); return;
   }
   if (a === 'trendkey') { S.trendKey = el.value; render(); return; }
+  if (a === 'deloadrule') { PLAN_OPTS.deload = el.value; savePlan(); render(); toast(`Deload: ${DELOAD_RULES[el.value].desc}.`); return; }
   if (a === 'injsev' || a === 'injstatus') {
     const inj = S.data.injuries.find((x) => x.id === el.dataset.id);
     if (a === 'injsev') inj.severity = +el.value; else inj.status = el.value;

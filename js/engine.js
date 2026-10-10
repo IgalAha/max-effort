@@ -143,7 +143,7 @@ export function suggestExercise({ key, history, today, week, recovery, bodyweigh
 
   // 4. deload: plan loads (never above them), low effort
   if (week === 4) {
-    why.push('Deload week: plan loads, stay at RPE ≤7, no progression.');
+    why.push('Deload week: lighter loads built from your Week 4, stay at RPE ≤7, no progression.');
     return out('Deload', Math.min(carried, 0));
   }
 
@@ -646,4 +646,41 @@ export function consistencyWeeks({ workouts, cardio, skips = [], weekStartDay, w
   let streak = 0;
   for (let i = rows.length - 2; i >= 0; i--) { if (rows[i].done >= Math.round(rows[i].planned * 0.8)) streak++; else break; }
   return { rows, streak };
+}
+
+// ---------------- NEXT BLOCK ----------------
+// How much to move each exercise's loads for the next block. Loads are re-anchored to the change in your
+// estimated max across the block (best e1RM in weeks 3–4 vs weeks 1–2, RPE-based sets only), capped at +5%
+// per block. A grinding peak week (missed reps or RPE well above target) repeats the block; a clear drop resets 5%.
+export function blockProgression({ workouts, days, blockStart, end, bodyweight = 0 }) {
+  const out = [];
+  days.forEach((d, dayIdx) => {
+    if (d.type !== 'strength') return;
+    d.exercises.forEach((slot, k) => {
+      const m = EXERCISES[slot.id] || { name: slot.id, step: 2.5, rpe: 8 };
+      const hist = historyFor(workouts, slot.id).filter((h) => h.ex && h.planRef && h.date >= blockStart && h.date <= end);
+      const best = (wks) => {
+        const v = hist.filter((h) => wks.includes(h.planRef.week)).map((h) => sessionBest(h.ex, bodyweight, !!m.bodyweight)).filter((b) => b && !b.estimated).map((b) => b.e1rm);
+        return v.length ? Math.max(...v) : null;
+      };
+      const start = best([0, 1]); const peak = best([2, 3]);
+      const w4 = hist.filter((h) => h.planRef.week === 3).flatMap((h) => workSets(h.ex));
+      const missed = w4.some((s) => s.planReps != null && s.reps < s.planReps);
+      const rpes = w4.map((s) => s.rpe).filter((r) => r != null);
+      const hardest = rpes.length ? Math.max(...rpes) : null;
+      const target = m.rpe || 8;
+      const pain = hist.some((h) => h.ex.pain && h.ex.pain.severity >= 4);
+      let pct = 0; let why; const gain = start && peak ? round1((peak / start - 1) * 100) : null;
+      if (!hist.length) why = 'Not trained this block, so loads stay the same.';
+      else if (pain) why = 'Pain was logged this block, so loads stay the same.';
+      else if (gain != null && gain <= -3) { pct = -5; why = `Estimated max fell ${Math.abs(gain)}% (${start} → ${peak} kg). Reset 5% lighter and build back.`; }
+      else if (missed || (hardest != null && hardest > target + 1)) why = `Peak week was a grind (${missed ? 'missed reps' : `RPE ${hardest} vs target ${target}`}). Repeat the block at the same loads.`;
+      else if (gain != null && gain >= 1) { pct = Math.min(5, Math.max(2.5, gain)); why = `Estimated max up ${gain}% (${start} → ${peak} kg) with peak week on target. Loads +${round1(pct)}%.`; }
+      else if (gain != null) { if (hardest != null && hardest <= target) { pct = 2.5; why = 'Strength held and peak week felt on target. One small step: +2.5%.'; } else why = `Estimated max flat (${gain >= 0 ? '+' : ''}${gain}%). Repeat the block.`; }
+      else if (w4.length) { if (!missed) { pct = 2.5; why = 'Every peak-week rep hit (not enough RPE to measure strength). +2.5%.'; } else why = 'Peak-week reps were missed. Repeat the block.'; }
+      else why = 'Peak week (W4) not logged, so loads stay the same.';
+      out.push({ dayIdx, k, key: slot.id, name: m.name || slot.id, step: m.step || 2.5, pct: round1(pct), why, start, peak, gain, sessions: hist.length });
+    });
+  });
+  return out;
 }

@@ -108,14 +108,41 @@ export const DAYS = [
 ];
 
 // Expand an exercise's plan for a given week into flat set prescriptions.
+// Plan-wide options (saved with the plan). deload: how Week 5 is built.
+//   load   = Week 4's sets and reps at 72.5% of the weight (25–30% lighter)
+//   volume = about half of Week 4's sets at 90% of the weight
+//   manual = whatever is typed into Week 5
+export const PLAN_OPTS = { deload: 'load' };
+export const DELOAD_RULES = {
+  load: { label: 'Lighter', desc: 'Week 4 sets and reps at 72.5% of the weight (25–30% lighter)' },
+  volume: { label: 'Less volume', desc: 'About half of Week 4\'s sets, 10% lighter' },
+  manual: { label: 'Manual', desc: 'Use the numbers typed into Week 5' },
+};
+const snap = (x, step) => Math.max(step, Math.round(x / step) * step);
+// The rows for one exercise in one week. Week 5 (index 4) is derived from Week 4 unless the deload rule is manual.
+export function weekGroups(ex, week) {
+  if (week !== 4 || PLAN_OPTS.deload === 'manual' || !ex.weeks[3]) return ex.weeks[week] || [];
+  const step = (EXERCISES[ex.id] || {}).step || 2.5;
+  const w4 = ex.weeks[3];
+  if (PLAN_OPTS.deload === 'volume') {
+    let keep = Math.max(1, Math.round(w4.reduce((a, g) => a + g.sets, 0) * 0.5));
+    const out = [];
+    for (const g of w4) { if (keep <= 0) break; const n = Math.min(g.sets, keep); out.push({ sets: n, reps: g.reps, weight: g.weight ? snap(g.weight * 0.9, step) : 0 }); keep -= n; }
+    return out;
+  }
+  return w4.map((g) => ({ sets: g.sets, reps: g.reps, weight: g.weight ? snap(g.weight * 0.725, step) : 0 }));
+}
+
 export function expandWeek(dayIdx, week) {
   const day = DAYS[dayIdx];
   if (!day || day.type !== 'strength') return [];
   return day.exercises.map((ex) => {
     const meta = EXERCISES[ex.id] || { name: ex.id, muscles: [], aliases: [], step: 2.5, rpe: 8, compound: false };
     const sets = [];
-    if (ex.warm) sets.push({ type: 'warmup', reps: ex.warm.reps, weight: ex.warm.weight });
-    for (const grp of ex.weeks[week]) {
+    const groups = weekGroups(ex, week);
+    const lightest = Math.min(...groups.map((g) => g.weight || 0));
+    if (ex.warm && !(week === 4 && ex.warm.weight >= lightest)) sets.push({ type: 'warmup', reps: ex.warm.reps, weight: ex.warm.weight });
+    for (const grp of groups) {
       for (let i = 0; i < grp.sets; i++) sets.push({ type: 'work', reps: grp.reps, weight: grp.weight });
     }
     return { id: ex.id, ...meta, sets };
@@ -133,9 +160,10 @@ export const MUSCLES = ['chest', 'back', 'delts', 'biceps', 'triceps', 'quads', 
 
 // ---- editable plan: the arrays/objects above are mutated in place so every importer sees live data ----
 const DEFAULT_SNAPSHOT = JSON.stringify({ days: DAYS, catalog: EXERCISES });
-export const exportPlan = () => JSON.parse(JSON.stringify({ days: DAYS, catalog: EXERCISES }));
+export const exportPlan = () => JSON.parse(JSON.stringify({ days: DAYS, catalog: EXERCISES, opts: PLAN_OPTS }));
 export function loadPlan(p) {
   if (!p || !Array.isArray(p.days) || !p.catalog) return;
+  PLAN_OPTS.deload = (p.opts && DELOAD_RULES[p.opts.deload]) ? p.opts.deload : 'load';
   DAYS.splice(0, DAYS.length, ...p.days);
   for (const k of Object.keys(EXERCISES)) delete EXERCISES[k];
   Object.assign(EXERCISES, p.catalog);
