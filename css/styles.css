@@ -239,3 +239,15 @@ td.up { color: var(--good); } td.down { color: var(--bad); }
 .wkbars .col i { display: block; width: 100%; border-radius: 4px 4px 0 0; background: var(--accent); min-height: 2px; }
 .wkbars .cur .col i { background: repeating-linear-gradient(45deg, var(--accent) 0 4px, rgba(47, 140, 255, .55) 4px 8px); }
 .wkbars .plan { position: absolute; left: -3px; right: -3px; border-top: 2px dashed var(--muted); z-index: 1; }
+
+/* next bar + next-day highlight */
+#nextbar { position: fixed; left: 0; right: 0; bottom: calc(var(--tabh) + env(safe-area-inset-bottom)); z-index: 14; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 16px; background: var(--accent); color: #fff; box-shadow: 0 -4px 16px rgba(0,0,0,.35); }
+#nextbar[hidden] { display: none; }
+#nextbar .nb-text { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 2px 0; min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+#nextbar .nb-k { font-size: 11.5px; font-weight: 900; letter-spacing: 1px; opacity: .92; }
+#nextbar .nb-t { font-size: 17px; font-weight: 850; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#nextbar .nb-go { min-height: 44px; padding: 0 18px; border: 0; border-radius: 12px; background: #fff; color: #0f3d80; font: inherit; font-size: 15.5px; font-weight: 850; display: inline-flex; align-items: center; gap: 8px; }
+body.has-nextbar main { padding-bottom: calc(var(--tabh) + 150px + env(safe-area-inset-bottom)); }
+.card.nextday { border: 2px solid var(--accent); background: #161b24; }
+.card.doneday { opacity: .72; }
+body.has-nextbar #toast { bottom: calc(var(--tabh) + 84px + env(safe-area-inset-bottom)); }

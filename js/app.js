@@ -2,11 +2,11 @@
 import { db, getMeta, setMeta } from './db.js';
 import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, weekGroups, PLAN_OPTS, DELOAD_RULES, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
 import * as E from './engine.js';
-import { parseHevy, parseGarmin, parseSleep, parseRestingHr } from './importers.js';
+import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv } from './importers.js';
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '9.9';
+const APP_VERSION = '10.0';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -222,6 +222,7 @@ function render() {
   $('#top').innerHTML = `${back ? `<button class="back" data-act="${back}">‹ Back</button>` : ''}<h1 class="${back ? 'grow' : ''}" style="${back ? 'font-size:18px;text-align:center' : ''}">${esc(title)}${back ? '' : `<span class="ver">v${APP_VERSION}</span>`}</h1>
     <button class="status-btn ${ctx.recovery.status}" data-act="gohealth" aria-label="Recovery status ${ctx.recovery.status}">${ctx.recovery.status}</button>`;
   $('#app').innerHTML = body;
+  renderNextBar();
   renderOverlay();
   renderReport();
   window.scrollTo(0, y);
@@ -465,6 +466,30 @@ async function applyNextBlock() {
   toast(n ? `Next block set: ${n} exercise${n > 1 ? 's' : ''} progressed.` : 'No changes: loads stay the same.');
 }
 
+const dayCls = (i) => (i === pos().dayIdx && !dayState(i) ? 'nextday' : dayState(i) === 'done' ? 'doneday' : '');
+// The blue bar above the tabs: what's next (or the workout in progress), one tap to start it, on every tab but Home.
+function nextBarHtml() {
+  if (S.draft) {
+    if (S.tab === 'workout') return '';
+    return `<div class="nb-text"><div class="nb-k">IN PROGRESS</div><div class="nb-t">${esc(S.draft.title || 'Workout')}</div></div><button class="nb-go" data-act="resume">Resume</button>`;
+  }
+  if (S.tab === 'home') return '';
+  if (S.tab === 'workout' && (S.post || S.cardioForm)) return '';
+  if (S.tab === 'me' && S.exportOpen) return '';
+  if (S.tab === 'plan' && (S.progView || S.splitOrder || S.editEx || S.editDay != null)) return '';
+  const p = pos(); const d = DAYS[p.dayIdx]; if (!d) return '';
+  const name = d.type === 'strength' ? (d.title || shortDay(d)) : `${shortDay(d)}${d.title ? ` · ${d.title}` : ''}`;
+  const btn = d.type === 'strength' ? `<button class="nb-go" data-act="startday" data-d="${p.dayIdx}"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Start</button>`
+    : d.type === 'cardio' ? '<button class="nb-go" data-act="cardio">Log</button>' : '<button class="nb-go" data-act="restdone">Done</button>';
+  return `<button class="nb-text" data-act="nbhome" aria-label="Next: ${esc(d.name)} · ${esc(name)}. Open Home"><div class="nb-k">NEXT · DAY ${p.dayIdx + 1} OF ${DAYS.length}</div><div class="nb-t">${esc(name)}</div></button>${btn}`;
+}
+function renderNextBar() {
+  const el = $('#nextbar'); if (!el) return;
+  const h = nextBarHtml();
+  el.innerHTML = h; el.hidden = !h;
+  document.body.classList.toggle('has-nextbar', !!h);
+}
+
 // ---------- DAY STATUS ----------
 function statusPill(i) {
   const st = dayState(i); const isNext = i === pos().dayIdx;
@@ -553,10 +578,10 @@ function startView(ctx) {
     const st = dayState(i);
     const next = statusPill(i);
     if (d.type === 'strength') {
-      h += `<div class="card routine"><div class="grow"><div class="b">${esc(shortDay(d))} <span class="muted small">· ${esc(d.title)}</span>${next}</div><div class="small muted">${esc(d.exercises.map((e) => (metaOf(e.id) || { name: e.id }).name).join(', '))}</div></div>
+      h += `<div class="card routine ${dayCls(i)}"><div class="grow"><div class="b">${esc(shortDay(d))} <span class="muted small">· ${esc(d.title)}</span>${next}</div><div class="small muted">${esc(d.exercises.map((e) => (metaOf(e.id) || { name: e.id }).name).join(', '))}</div></div>
         <button class="btn primary sm" data-act="startday" data-d="${i}">Start</button></div>`;
     } else if (d.type === 'cardio') {
-      h += `<div class="card routine"><div class="grow"><div class="b">${esc(shortDay(d))}${next}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm" data-act="cardio">Log</button></div>`;
+      h += `<div class="card routine ${dayCls(i)}"><div class="grow"><div class="b">${esc(shortDay(d))}${next}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm" data-act="cardio">Log</button></div>`;
     }
   });
   h += '<div class="tiny faint" style="text-align:center;margin-top:6px">Starting a routine uses this week\'s numbers, adjusted by your last RPE and today\'s recovery.</div>';
@@ -1023,7 +1048,7 @@ function planView() {
   if (S.planMode === 'week') {
     h += `<div class="chips weeks">${[0, 1, 2, 3, 4].map((v) => `<button class="chip ${S.planWeek === v ? 'on' : ''}" data-act="planweek" data-v="${v}">W${v + 1}<small>${WEEK_NAMES[v]}</small></button>`).join('')}</div>`;
     DAYS.forEach((d, i) => {
-      h += `<div class="card"><div class="row between"><div class="grow"><div class="b" style="font-size:17px">${esc(d.name)}${S.planWeek === p.week ? statusPill(i) : ''}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div>`;
+      h += `<div class="card ${S.planWeek === p.week ? dayCls(i) : ''}"><div class="row between"><div class="grow"><div class="b" style="font-size:17px">${esc(d.name)}${S.planWeek === p.week ? statusPill(i) : ''}</div><div class="small muted">${esc(d.title)}</div></div><button class="btn sm primary" data-act="editday" data-d="${i}">✎ Edit</button></div>`;
       if (d.type === 'strength') {
         h += '<div style="margin-top:6px">';
         for (const ex of expandWeek(i, S.planWeek)) {
@@ -1497,7 +1522,9 @@ function meView(ctx) {
     <label class="btn block sm" style="cursor:pointer;margin-top:10px">Garmin activities CSV<input type="file" data-act="impgarmin" hidden></label>
     <label class="btn block sm" style="cursor:pointer">Garmin sleep CSV<input type="file" data-act="impsleep" hidden></label>
     <label class="btn block sm" style="cursor:pointer">Hevy workouts CSV<input type="file" data-act="imphevy" hidden></label>
-    <label class="l">Resting HR (paste the weekly table from Garmin Connect)</label><textarea class="f" id="rhr-paste" placeholder="29 Sep - 5 Oct    47 bpm    120 bpm"></textarea><button class="btn block sm" data-act="imprhr" style="margin-top:8px">Import resting HR</button></div>
+    <label class="btn block sm" style="cursor:pointer">Garmin resting HR CSV<input type="file" data-act="imprhrcsv" hidden></label>
+    <div class="tiny muted" style="margin:2px 0 6px">Garmin Connect › Health Stats › Resting Heart Rate › pick 1 year (or 4 weeks) › ⋮ › Export CSV. Weekly or daily files both work.</div>
+    <details><summary class="tiny muted" style="cursor:pointer;padding:6px 0">Or paste the weekly table instead</summary><textarea class="f" id="rhr-paste" placeholder="29 Sep - 5 Oct    47 bpm    120 bpm"></textarea><button class="btn block sm" data-act="imprhr" style="margin-top:8px">Import resting HR</button></div>
     <div class="card"><button class="btn danger block" data-act="wipe">Erase everything on this phone</button></div>`;
 }
 
@@ -1646,6 +1673,7 @@ document.addEventListener('click', async (e) => {
     case 'startday': S.daySheet = null; startDay(+t.dataset.d); break;
     case 'startempty': startEmpty(); break;
     case 'resume': S.tab = 'workout'; render(); window.scrollTo(0, 0); break;
+    case 'nbhome': S.tab = 'home'; S.detail = null; render(); window.scrollTo(0, 0); break;
     case 'cardio': S.daySheet = null; S.tab = 'workout'; S.cardioForm = true; render(); window.scrollTo(0, 0); break;
     case 'cardioback': S.cardioForm = false; render(); break;
     case 'ctype': document.querySelectorAll('#c-type-seg button').forEach((b) => b.classList.toggle('on', b === t)); $('#c-type').value = t.dataset.v; break;
@@ -1843,6 +1871,15 @@ document.addEventListener('change', async (e) => {
       loadPlan(p); splitShared(todayStr()); await setMeta('plan', exportPlan()); toast('Plan imported.'); render();
     } else if (a === 'imphevy') { const r = parseHevy(txt); await db.putMany('workouts', r); S.data.workouts = await db.all('workouts'); toast(`Imported ${r.length} Hevy sessions.`); render(); }
     else if (a === 'impgarmin') { const r = parseGarmin(txt); await db.putMany('cardio', r); S.data.cardio = await db.all('cardio'); await loadAll(); toast(`Imported ${r.length} Garmin activities.`); render(); }
+    else if (a === 'imprhrcsv') {
+      const r = parseRestingHrCsv(txt);
+      if (!r.length) { toast('No resting-HR rows found in that file.'); el.value = ''; return; }
+      const near = (x, y) => Math.abs(E.daysBetween(x, y)) <= 3;
+      for (const old of S.data.rhr) if (!r.some((n) => n.id === old.id) && r.some((n) => near(n.weekEnd, old.weekEnd))) await db.del('rhr', old.id);
+      await db.putMany('rhr', r); S.data.rhr = await db.all('rhr');
+      const last = r[r.length - 1];
+      toast(`Imported ${r.length} weeks of resting HR. Latest: ${last.resting} bpm.`); render();
+    }
     else if (a === 'impsleep') { const r = parseSleep(txt, new Date().getFullYear()); await db.putMany('sleep', r); S.data.sleep = await db.all('sleep'); toast(`Imported ${r.length} weeks of sleep.`); render(); }
   } catch { toast('That file could not be read.'); }
   el.value = '';

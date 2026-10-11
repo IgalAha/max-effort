@@ -158,3 +158,54 @@ export function parseRestingHr(text, refYear = new Date().getFullYear()) {
   const ends = weekEnds(parsed.map((p) => p.label), refYear);
   return parsed.map((p, i) => ({ id: `rhr-${ends[i]}`, weekEnd: ends[i], label: p.label, resting: p.resting, high: p.high })).filter((x) => x.weekEnd);
 }
+
+// Garmin Connect › Health Stats › Resting Heart Rate › export (CSV). Weekly ("13/10/2025,49": the week starting
+// that day) or daily rows. Dates may be dd/mm/yyyy, mm/dd/yyyy, yyyy-mm-dd or "13 Oct 2025"/"Oct 13, 2025";
+// the day/month order is picked so consecutive rows are evenly spaced. Daily rows are averaged into Mon–Sun weeks.
+export function parseRestingHrCsv(text) {
+  const first = (text.replace(/^\uFEFF/, '').split(/\r?\n/)[0] || '').split(',')[0].trim();
+  const body = /^\d|^[A-Za-z]{3}[a-z]*\.?\s+\d/.test(first) ? `date,value\n${text}` : text; // no header row
+  const rows = parseCSV(body).map((o) => Object.values(o)).filter((r) => r.length >= 2);
+  const raw = [];
+  for (const r of rows) {
+    const d = (r[0] || '').trim(); const v = parseFloat(String(r[1]).replace(/[^\d.]/g, ''));
+    if (!d || !Number.isFinite(v) || v < 25 || v > 130) continue;
+    raw.push({ d, v });
+  }
+  if (!raw.length) return [];
+  const toIso = (y, m, d) => (m >= 1 && m <= 12 && d >= 1 && d <= 31 ? `${y}-${pad(m)}-${pad(d)}` : null);
+  const parseWith = (order) => raw.map(({ d, v }) => {
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(d);
+    if (m) return { iso: toIso(+m[1], +m[2], +m[3]), v };
+    m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(d);
+    if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return { iso: order === 'dmy' ? toIso(y, +m[2], +m[1]) : toIso(y, +m[1], +m[2]), v }; }
+    m = /^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?,?\s+(\d{4})$/.exec(d);
+    if (m && MON[m[2].toLowerCase()]) return { iso: toIso(+m[3], MON[m[2].toLowerCase()], +m[1]), v };
+    m = /^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})$/.exec(d);
+    if (m && MON[m[1].toLowerCase()]) return { iso: toIso(+m[3], MON[m[1].toLowerCase()], +m[2]), v };
+    return { iso: null, v };
+  });
+  const days = (iso) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000;
+  const score = (list) => {
+    const ok = list.filter((x) => x.iso); if (ok.length < list.length) return -1;
+    const ds = ok.map((x) => days(x.iso)).sort((a, b) => a - b); let even = 0;
+    for (let i = 1; i < ds.length; i++) { const g = ds[i] - ds[i - 1]; if (g === 1 || g === 7) even++; }
+    return even;
+  };
+  const a = parseWith('dmy'); const b = parseWith('mdy');
+  const list = (score(b) > score(a) ? b : a).filter((x) => x.iso).sort((x, y) => (x.iso < y.iso ? -1 : 1));
+  if (!list.length) return [];
+  const gaps = list.slice(1).map((x, i) => days(x.iso) - days(list[i].iso)).sort((p, q) => p - q);
+  const daily = gaps.length && gaps[Math.floor(gaps.length / 2)] <= 2;
+  const isoOf = (n) => new Date(n * 86400000).toISOString().slice(0, 10);
+  if (!daily) {
+    return list.map(({ iso, v }) => { const end = isoOf(days(iso) + 6); return { id: `rhr-${end}`, weekEnd: end, label: `week of ${iso}`, resting: Math.round(v), high: null, source: 'garmin-csv' }; });
+  }
+  const weeks = new Map();
+  for (const { iso, v } of list) {
+    const n = days(iso); const dow = (new Date(n * 86400000).getUTCDay() + 6) % 7; // Monday = 0
+    const end = isoOf(n - dow + 6);
+    const w = weeks.get(end) || { sum: 0, n: 0 }; w.sum += v; w.n++; weeks.set(end, w);
+  }
+  return [...weeks.entries()].map(([end, w]) => ({ id: `rhr-${end}`, weekEnd: end, label: `week to ${end} (${w.n} day${w.n > 1 ? 's' : ''})`, resting: Math.round(w.sum / w.n), high: null, source: 'garmin-csv' }));
+}
