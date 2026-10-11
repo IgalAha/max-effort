@@ -196,7 +196,7 @@ export function parseRestingHrCsv(text) {
   const list = (score(b) > score(a) ? b : a).filter((x) => x.iso).sort((x, y) => (x.iso < y.iso ? -1 : 1));
   if (!list.length) return [];
   const gaps = list.slice(1).map((x, i) => days(x.iso) - days(list[i].iso)).sort((p, q) => p - q);
-  const daily = gaps.length && gaps[Math.floor(gaps.length / 2)] <= 2;
+  const daily = gaps.length && gaps[0] <= 2; // weekly exports never have rows closer than 7 days
   const isoOf = (n) => new Date(n * 86400000).toISOString().slice(0, 10);
   if (!daily) {
     return list.map(({ iso, v }) => { const end = isoOf(days(iso) + 6); return { id: `rhr-${end}`, weekEnd: end, label: `week of ${iso}`, resting: Math.round(v), high: null, source: 'garmin-csv' }; });
