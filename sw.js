@@ -1,5 +1,5 @@
 // Offline layer. The app shell must cache for install/offline to work; optional files (your data seed) never block it.
-const CACHE = 'max-effort-v10-0-1';
+const CACHE = 'max-effort-v10-0-2';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'css/styles.css',
   'js/app.js', 'js/engine.js', 'js/plan.js', 'js/db.js', 'js/importers.js', 'js/coach_prompt.js', 'js/export.js'];
 const OPTIONAL = ['data/seed.json'];
@@ -7,8 +7,10 @@ const OPTIONAL = ['data/seed.json'];
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
     const c = await caches.open(CACHE);
-    await c.addAll(SHELL);
-    await Promise.all(OPTIONAL.map((u) => c.add(u).catch(() => {})));
+    // cache: 'reload' skips the browser's HTTP cache. GitHub Pages lets browsers keep files for 10 minutes,
+    // so without it a new version could be installed with the previous version's files.
+    await c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })));
+    await Promise.all(OPTIONAL.map((u) => c.add(new Request(u, { cache: 'reload' })).catch(() => {})));
     await self.skipWaiting();
   })());
 });

@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.0.1';
+const APP_VERSION = '10.0.2';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
