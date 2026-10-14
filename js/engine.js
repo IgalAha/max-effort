@@ -684,3 +684,102 @@ export function blockProgression({ workouts, days, blockStart, end, bodyweight =
   });
   return out;
 }
+
+// ---------------- WORKOUT REVIEW ----------------
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export const monthYear = (iso) => `${MONTHS[+iso.slice(5, 7) - 1]} ${iso.slice(0, 4)}`;
+// Everything the review screen shows for one logged session. Pure: the app adds "next time" (needs the plan).
+export function workoutReview({ workout: w, workouts, bodyweight = 0, garmin = null }) {
+  const before = (h) => h.date < w.date || (h.date === w.date && h.id !== w.id && (h.start || '') < (w.start || ''));
+  const prior = workouts.filter(before);
+  const deload = !!(w.planRef && w.planRef.week === 4);
+  let planReps = 0; let doneReps = 0; let plannedSets = 0; let doneSets = 0;
+  const rpeDiffs = []; const rpes = [];
+  const exercises = [];
+  for (const e of w.exercises) {
+    const m = EXERCISES[e.key] || { name: e.name, rpe: 8, muscles: [] };
+    const target = deload ? Math.min(m.rpe || 8, 7) : (m.rpe || 8);
+    if (e.skipped) {
+      const ps = (e.planned || []).reduce((a, g) => a + (g.sets || 0), 0);
+      plannedSets += ps; planReps += (e.planned || []).reduce((a, g) => a + (g.sets || 0) * (g.reps || 0), 0);
+      exercises.push({ key: e.key, name: m.name || e.name, skipped: true, reason: e.skipReason || '', target });
+      continue;
+    }
+    const work = workSets(e);
+    const sets = work.map((s) => {
+      const hasPlan = s.planReps != null;
+      if (hasPlan) { plannedSets++; planReps += s.planReps; doneReps += Math.min(s.reps, s.planReps); }
+      doneSets++;
+      if (s.rpe != null) { rpes.push(s.rpe); rpeDiffs.push(s.rpe - target); }
+      const diff = hasPlan ? s.reps - s.planReps : null;
+      return { weight: s.weight, reps: s.reps, rpe: s.rpe ?? null, planWeight: s.planWeight ?? null, planReps: s.planReps ?? null,
+        status: !hasPlan ? 'free' : diff < 0 ? 'short' : diff > 0 ? 'extra' : 'hit', diff, hot: s.rpe != null && s.rpe > target + 0.5 };
+    });
+    const best = sessionBest(e, bodyweight, !!m.bodyweight);
+    const hist = historyFor(prior, e.key).filter((h) => h.ex && workSets(h.ex).length);
+    const priorBests = hist.map((h) => ({ date: h.date, b: sessionBest(h.ex, bodyweight, !!m.bodyweight) })).filter((x) => x.b);
+    const last = priorBests[0] || null;
+    const highlights = [];
+    if (best && priorBests.length >= 2) {
+      const top = Math.max(...priorBests.map((x) => x.b.e1rm));
+      if (best.e1rm > top + 0.4) highlights.push({ kind: 'best', text: `All-time best e1RM: ${best.e1rm} kg`, sub: `${best.weight} × ${best.reps}${best.rpe != null ? ` at RPE ${best.rpe}` : ''}` });
+      else {
+        const higher = priorBests.find((x) => x.b.e1rm >= best.e1rm);
+        if (higher && daysBetween(higher.date, w.date) >= 42) highlights.push({ kind: 'since', since: higher.date, text: `Best since ${monthYear(higher.date)}`, sub: `${best.e1rm} kg from ${best.weight} × ${best.reps}` });
+      }
+      const maxW = Math.max(...work.map((s) => s.weight || 0));
+      const priorMaxW = Math.max(0, ...hist.flatMap((h) => workSets(h.ex).map((s) => s.weight || 0)));
+      if (maxW > priorMaxW && priorMaxW > 0) highlights.push({ kind: 'heavy', text: `Heaviest ever: ${maxW} kg`, sub: `previous ${priorMaxW} kg` });
+      let rep = null;
+      for (const s of work) {
+        const pr = hist.flatMap((h) => workSets(h.ex)).filter((x) => (x.weight || 0) >= (s.weight || 0)).map((x) => x.reps);
+        if (pr.length && s.reps > Math.max(...pr) && (!rep || s.reps - Math.max(...pr) > rep.by)) rep = { w: s.weight, reps: s.reps, by: s.reps - Math.max(...pr) };
+      }
+      if (rep) highlights.push({ kind: 'reps', text: `Rep record: ${rep.w} kg × ${rep.reps}`, sub: `${rep.by} more than ever at this weight` });
+    }
+    const trend = [...priorBests.slice(0, 5).reverse().map((x) => ({ date: x.date, y: x.b.e1rm })), ...(best ? [{ date: w.date, y: best.e1rm }] : [])];
+    const short = sets.filter((s) => s.status === 'short').reduce((a, s) => a - s.diff, 0);
+    const extra = sets.filter((s) => s.status === 'extra').reduce((a, s) => a + s.diff, 0);
+    exercises.push({ key: e.key, name: m.name || e.name, target, sets, best, last: last ? { date: last.date, e1rm: last.b.e1rm } : null,
+      e1rmChange: best && last ? round1(best.e1rm - last.b.e1rm) : null, highlights, trend, short, extra,
+      hot: sets.some((s) => s.hot), pain: e.pain || null, notes: e.notes || '', volume: Math.round(volumeLoad(e)) });
+  }
+  const volume = exercises.reduce((a, x) => a + (x.volume || 0), 0);
+  const avgRpe = rpes.length ? round1(mean(rpes)) : null;
+  const vsTarget = rpeDiffs.length ? round1(mean(rpeDiffs)) : null;
+  const completion = planReps ? Math.round((doneReps / planReps) * 100) : null;
+  // previous session of the same workout (by name, so a re-used day slot from an old split doesn't count)
+  const norm = (t) => String(t || '').trim().toLowerCase();
+  const prevW = prior.filter((x) => norm(x.title) === norm(w.title) && x.exercises.some((e) => workSets(e).length)).sort((a, b) => (a.date < b.date ? 1 : -1))[0] || null;
+  let vsLast = null;
+  if (prevW) {
+    const pv = prevW.exercises.reduce((a, e) => a + volumeLoad(e), 0);
+    const pr = prevW.exercises.flatMap((e) => workSets(e).map((s) => s.rpe)).filter((x) => x != null);
+    vsLast = { date: prevW.date, volume: Math.round(pv), volumePct: pv ? Math.round(((volume - pv) / pv) * 100) : null, avgRpe: pr.length ? round1(mean(pr)) : null, durationMin: prevW.durationMin ?? null };
+  }
+  const highlights = exercises.flatMap((x) => (x.highlights || []).map((h) => ({ ...h, exercise: x.name })));
+  const order = { best: 0, heavy: 1, since: 2, reps: 3 };
+  highlights.sort((a, b) => order[a.kind] - order[b.kind]);
+  const skipped = exercises.filter((x) => x.skipped).length;
+  const shortSets = exercises.reduce((a, x) => a + (x.sets || []).filter((s) => s.status === 'short').length, 0);
+  // verdict
+  const parts = [];
+  if (completion == null) parts.push(`${doneSets} working sets logged`);
+  else if (completion >= 98 && !skipped) parts.push('Every set done');
+  else if (completion >= 90) parts.push(`Nearly everything done (${completion}% of planned reps)`);
+  else parts.push(`${completion}% of planned reps done${skipped ? `, ${skipped} exercise${skipped > 1 ? 's' : ''} skipped` : ''}`);
+  if (vsTarget == null) parts.push('no RPE logged, so effort is unknown');
+  else if (vsTarget > 0.5) parts.push(`harder than planned (RPE +${vsTarget} vs target)`);
+  else if (vsTarget < -1) parts.push(`easier than planned (RPE ${vsTarget} vs target), room to add load`);
+  else parts.push('effort on target');
+  const h0 = highlights[0];
+  if (h0) parts.push(h0.kind === 'best' ? `an all-time best on ${h0.exercise}` : h0.kind === 'heavy' ? `your heaviest ${h0.exercise} ever` : h0.kind === 'since' ? `your best ${h0.exercise} since ${monthYear(h0.since)}` : `a rep record on ${h0.exercise}`);
+  const tone = (completion != null && completion < 90) || (vsTarget != null && vsTarget > 0.5) ? 'Tough session.' : (completion == null || completion >= 95) && vsTarget != null && vsTarget <= 0.5 ? 'Strong session.' : 'Solid session.';
+  const verdict = `${tone} ${parts[0].charAt(0).toUpperCase()}${parts[0].slice(1)}${parts.length > 2 ? `, ${parts[1]}, and ${parts[2]}` : parts[1] ? ` and ${parts[1]}` : ''}.`;
+  const muscles = {};
+  for (const e of w.exercises) { if (e.skipped) continue; const ms = (EXERCISES[e.key] || {}).muscles || []; const n = workSets(e).length; ms.forEach((m, i) => { muscles[m] = (muscles[m] || 0) + n * (i === 0 ? 1 : 0.5); }); }
+  return { title: w.title, date: w.date, planRef: w.planRef || null, deload, completion, plannedSets, doneSets, shortSets, skipped, volume, avgRpe, vsTarget,
+    durationMin: garmin && garmin.durationMin ? garmin.durationMin : w.durationMin ?? null, fromGarmin: !!(garmin && garmin.durationMin),
+    avgHr: garmin ? garmin.avgHr ?? null : null, maxHr: garmin ? garmin.maxHr ?? null : null, exercises, highlights, vsLast, verdict, muscles,
+    pain: exercises.filter((x) => x.pain && x.pain.severity >= 1).map((x) => ({ name: x.name, ...x.pain })), notes: w.notes || '', sessionRpe: w.sessionRpe ?? null };
+}

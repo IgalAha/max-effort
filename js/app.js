@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.0.2';
+const APP_VERSION = '10.1';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -203,7 +203,7 @@ function render() {
   let title = TITLES[S.tab];
   let body = '';
   if (S.tab === 'home') {
-    if (S.detail) { back = 'detailback'; title = 'Activity'; body = detailView(); } else body = homeView(ctx);
+    if (S.detail) { back = 'detailback'; title = String(S.detail).startsWith('w:') ? 'Workout review' : 'Activity'; body = detailView(); } else body = homeView(ctx);
   } else if (S.tab === 'workout') {
     if (S.post) { title = 'Workout complete'; body = postView(); }
     else if (S.draft) { title = S.draft.editingId ? 'Edit workout' : 'Logging'; body = workoutView(); }
@@ -333,7 +333,7 @@ function feedCard(it) {
     if (c.avgHr) meta.push(`<span style="${c.avgHr > easyCeil() && c.durationMin >= 40 && ['run', 'mtb', 'ride'].includes(c.type) ? 'color:var(--warn)' : ''}">${c.avgHr} bpm</span>`);
     if (c.ascentM) meta.push(`↑${Math.round(c.ascentM)} m`);
   }
-  const sub = it.kind === 'strength' && it.workout ? `<div class="tiny faint" style="margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(it.workout.exercises.map((e) => (metaOf(e.key) || {}).name || e.name).join(', '))}</div>` : '';
+  const sub = it.kind === 'strength' && it.workout ? `<div class="row between" style="margin-top:3px;gap:8px"><span class="tiny faint" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(it.workout.exercises.map((e) => (metaOf(e.key) || {}).name || e.name).join(', '))}</span><span class="tiny" style="color:var(--accent);font-weight:800;white-space:nowrap">Review ›</span></div>` : '';
   return `<div class="card tap" data-act="detail" data-id="${esc(it.id)}"><div class="feed"><div class="badge ${badgeCls(it.type)}">${badgeTxt(it.type)}</div><div class="grow"><div class="row between"><span class="b">${esc(it.title)}</span><span class="tiny muted">${relDate(it.date)}</span></div><div class="meta">${meta.join('')}</div>${sub}</div></div></div>`;
 }
 
@@ -347,6 +347,7 @@ function detailView() {
       <button class="btn block" data-act="undoskip" data-id="${esc(k.id)}">Undo skip</button>`;
   }
   let h = `<div class="card"><div class="feed"><div class="badge ${badgeCls(it.type)}">${badgeTxt(it.type)}</div><div class="grow"><div class="b" style="font-size:19px">${esc(it.title)}</div><div class="muted small">${fmtDate(it.date)} · ${esc(it.start)}</div></div></div>`;
+  if (it.kind === 'strength' && it.workout) return reviewView(it);
   if (it.kind === 'strength') {
     const g = it.garmin;
     h += `<div class="stats" style="margin-top:12px"><div class="stat"><span>Duration</span><b>${fmtDur(it.durationMin)}</b></div><div class="stat"><span>Avg HR</span><b>${g && g.avgHr ? g.avgHr : '–'}</b></div><div class="stat"><span>Max HR</span><b>${g && g.maxHr ? g.maxHr : '–'}</b></div></div>`;
@@ -488,6 +489,108 @@ function renderNextBar() {
   const h = nextBarHtml();
   el.innerHTML = h; el.hidden = !h;
   document.body.classList.toggle('has-nextbar', !!h);
+}
+
+// ---------- WORKOUT REVIEW ----------
+const miniTile = (k, v, cls = '') => `<div class="rv-mt"><span>${esc(k)}</span><b class="${cls}">${esc(String(v))}</b></div>`;
+function reviewNext(key, w) {
+  const newer = S.data.workouts.find((x) => x.id !== w.id && (x.date > w.date || (x.date === w.date && (x.start || '') > (w.start || ''))) && x.exercises.some((e) => e.key === key && !e.skipped && E.workSets(e).length));
+  if (newer) return { stale: true, action: 'Done', text: `Done again on ${fmtDate(newer.date)}; its next step is on that session.` };
+  const at = w.planRef && dayIndexOf(w.planRef) >= 0 ? { week: w.planRef.week, dayIdx: dayIndexOf(w.planRef) } : null;
+  const ne = nextExposure(key, at || pos());
+  const sug = E.suggestExercise({ key, history: E.historyFor(S.data.workouts, key), today: todayStr(), week: ne ? ne.week : S.settings.week, recovery: null, bodyweight: S.settings.bodyweight });
+  let text = 'Not in your current plan. Repeat these loads and add reps while RPE stays ≤8.';
+  if (ne) { const pl = expandWeek(ne.dayIdx, ne.week).find((x) => x.id === key); if (pl) text = `Week ${ne.week + 1} (${WEEK_NAMES[ne.week]}): ${groupsTxt(pl.sets.filter((x) => x.type === 'work'), sug.delta)} kg.`; }
+  return { action: sug.action, delta: sug.delta, why: sug.why[0] || '', text };
+}
+function reviewData(w) {
+  const g = S.data.cardio.find((c) => c.type === 'strength-garmin' && c.date === w.date) || null;
+  const r = E.workoutReview({ workout: w, workouts: S.data.workouts, bodyweight: S.settings.bodyweight, garmin: g });
+  for (const x of r.exercises) if (!x.skipped) x.next = reviewNext(x.key, w);
+  return r;
+}
+function nextChip(x) {
+  const n = x.next || {};
+  if (x.short) return `<span class="rv-chip warn">● HOLD · ${x.short} REP${x.short > 1 ? 'S' : ''} SHORT</span>`;
+  if (n.action === 'Increase') return `<span class="rv-chip up">▲ +${n.delta} KG</span>`;
+  if (n.action === 'Reduce') return `<span class="rv-chip down">▼ ${n.delta} KG</span>`;
+  if (n.action === 'Done') return '<span class="rv-chip">DONE AGAIN</span>';
+  if (n.action === 'Deload') return '<span class="rv-chip">DELOAD</span>';
+  return `<span class="rv-chip">● ${esc(String(n.action || 'Hold').toUpperCase())}</span>`;
+}
+function sparkline(pts, label) {
+  if (pts.length < 3) return '';
+  const ys = pts.map((p) => p.y); const lo = Math.min(...ys); const hi = Math.max(...ys); const W = 110; const H = 34;
+  const xy = pts.map((p, i) => [4 + (i * (W - 8)) / (pts.length - 1), H - 4 - ((p.y - lo) / (hi - lo || 1)) * (H - 8)]);
+  const last = xy[xy.length - 1];
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}"><polyline points="${xy.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/></svg>`;
+}
+const SHORT_STOP = new Set(['bb', 'db', 'kb', 'weighted', 'parallel', 'grip', 'seated', 'single', 'arm', 'cuff', 'cable', 'chest-supported', 'swiss', 'bar', 'back', 'barbell', 'dumbbell', 'machine']);
+const shortName = (n) => { const w = String(n).split(/\s+/); const k = w.filter((x) => !SHORT_STOP.has(x.toLowerCase())); const r = k.length ? k : w; return r[0].length <= 2 && r[1] ? `${r[0]} ${r[1]}` : r[0]; };
+function effortChart(r) {
+  const ex = r.exercises.filter((x) => !x.skipped && x.sets.length);
+  if (!ex.some((x) => x.sets.some((s) => s.rpe != null))) return '';
+  const hgt = (v) => Math.round(((Math.min(10, Math.max(5, v)) - 5) / 5) * 100) + 4;
+  const hot = ex.flatMap((x) => x.sets.filter((s) => s.hot).map(() => x.name));
+  const hotNames = [...new Set(hot)];
+  const dense = ex.reduce((a, x) => a + x.sets.length, 0) > 12;
+  const aria = ex.map((x) => `${x.name}: ${x.sets.map((s) => s.rpe ?? 'no RPE').join(', ')}, target ${x.target}`).join('. ');
+  return `<div class="card"><div class="row between"><span class="rv-h">EFFORT, SET BY SET</span><span class="tiny muted">RPE · ▬ target</span></div>
+    <div class="rv-chart" role="img" aria-label="${esc(aria)}" style="grid-template-columns:repeat(${ex.length},minmax(0,1fr))">${ex.map((x) => `<div class="rv-grp"><div class="rv-bars"><div class="rv-tgt" style="bottom:${hgt(x.target)}px"></div>${x.sets.map((s) => `<div class="rv-bar"><span class="${s.hot ? 'hot' : ''}">${dense && !s.hot ? '&nbsp;' : s.rpe ?? '–'}</span><i class="${s.hot ? 'hot' : ''} ${s.rpe == null ? 'none' : ''}" style="height:${s.rpe == null ? 4 : hgt(s.rpe)}px"></i></div>`).join('')}</div><span class="rv-lbl">${esc(shortName(x.name))}</span></div>`).join('')}</div>
+    ${dense ? '<div class="tiny muted" style="margin-top:4px">Numbers shown only for sets above target; every RPE is in the exercise cards below.</div>' : ''}<div class="small" style="margin-top:8px;line-height:1.45">${hotNames.length ? `Sets that ran <b class="warn-t">above target</b> (orange): ${esc(hotNames.join(', '))}. Too many of these and next time holds or drops the load.` : r.vsTarget != null && r.vsTarget < -1 ? 'Every set was well under target: there is room to add load.' : 'Every set stayed on or under target.'}</div></div>`;
+}
+function exerciseCard(x) {
+  if (x.skipped) return `<div class="card" style="opacity:.75"><div class="row between"><h3 class="muted">${esc(x.name)}</h3><span class="tag">skipped</span></div>${x.reason ? `<div class="small muted">${esc(x.reason)}</div>` : ''}</div>`;
+  const notable = x.highlights.length || x.short || x.hot || (x.next && !['Hold', 'Done', 'Follow plan'].includes(x.next.action)) || (x.pain && x.pain.severity >= 1);
+  const open = notable || (S.revOpen && S.revOpen[x.key]);
+  const rpeR = x.sets.map((s) => s.rpe).filter((v) => v != null);
+  const summary = `${groupsTxt(x.sets.map((s) => ({ weight: s.weight, reps: s.reps })))} kg${rpeR.length ? ` · RPE ${Math.min(...rpeR)}${Math.max(...rpeR) !== Math.min(...rpeR) ? `–${Math.max(...rpeR)}` : ''}` : ''}${x.sets.every((s) => s.status === 'hit' || s.status === 'extra') ? ' · all reps' : ''}`;
+  if (!open) return `<button class="rv-row" data-act="revtoggle" data-k="${esc(x.key)}"><span><b>${esc(x.name)}</b><br><span class="tiny muted">${esc(summary)}</span></span>${nextChip(x)}</button>`;
+  const anyPlan = x.sets.some((s) => s.planReps != null);
+  let h = `<div class="card"><div class="row between" style="gap:8px"><h3 style="color:var(--accent)">${esc(x.name)}</h3>${nextChip(x)}</div>
+    <div class="rv-sets ${anyPlan ? '' : 'noplan'}"><span class="rv-th">SET</span>${anyPlan ? '<span class="rv-th">PLANNED</span>' : ''}<span class="rv-th">DONE</span><span class="rv-th n">RPE</span>
+    ${x.sets.map((s, i) => `<span class="muted">${i + 1}</span>${anyPlan ? `<span class="muted">${s.planReps != null ? `${n1(s.planWeight)} × ${s.planReps}` : '–'}</span>` : ''}<span class="b">${n1(s.weight)} × ${s.reps} ${s.status === 'hit' ? '<span class="ok-t">✓</span>' : s.status === 'extra' ? `<span class="ok-t">+${s.diff}</span>` : s.status === 'short' ? `<span class="warn-t">${s.diff}</span>` : ''}</span><span class="n b ${s.hot ? 'warn-t' : ''}">${s.rpe ?? '–'}</span>`).join('')}</div>`;
+  if (x.best) h += `<div class="row between rv-trend"><div><div class="small b">e1RM ${x.best.e1rm} kg${x.e1rmChange ? ` <span class="${x.e1rmChange > 0 ? 'ok-t' : 'warn-t'}">${x.e1rmChange > 0 ? '▲' : '▼'} ${Math.abs(x.e1rmChange)}</span>` : ''}</div><div class="tiny muted">${x.last ? `vs ${fmtDate(x.last.date)}` : 'first time logged'}${x.best.estimated ? ' · no RPE, reads low' : ''}</div></div>${sparkline(x.trend, `${x.name} estimated max, last ${x.trend.length} sessions: ${x.trend.map((p) => p.y).join(', ')} kg`)}</div>`;
+  x.highlights.forEach((hl) => { h += `<div class="tiny" style="margin-top:6px;color:var(--warn);font-weight:750">★ ${esc(hl.text)} <span class="muted" style="font-weight:600">· ${esc(hl.sub)}</span></div>`; });
+  if (x.pain && x.pain.severity >= 1) h += `<div class="callout bad" style="margin-top:8px">Pain ${x.pain.severity}/10${x.pain.region ? ` · ${esc(x.pain.region)}` : ''}</div>`;
+  if (x.notes) h += `<div class="small muted" style="margin-top:6px">${esc(x.notes)}</div>`;
+  if (x.next) h += `<div class="rv-next"><b>${x.next.stale ? 'Since then:' : 'Next time:'}</b> ${esc(x.next.text)}${x.next.why && !x.next.stale ? `<div class="tiny muted" style="margin-top:3px">${esc(x.next.why)}</div>` : ''}</div>`;
+  if (!notable) h += `<button class="linkbtn" data-act="revtoggle" data-k="${esc(x.key)}" style="padding:6px 0 0">Show less</button>`;
+  return h + '</div>';
+}
+function reviewView(it) {
+  const w = it.workout; const r = reviewData(w);
+  const pr = w.planRef; const dayName = pr && dayIndexOf(pr) >= 0 ? `DAY ${dayIndexOf(pr) + 1}` : '';
+  const eyebrow = [new Date(`${w.date}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase(), pr ? `WEEK ${pr.week + 1} ${WEEK_NAMES[pr.week].toUpperCase()}` : '', dayName].filter(Boolean).join(' · ');
+  const pct = r.completion; const C = 2 * Math.PI * 31;
+  const ring = pct == null ? '' : `<svg width="76" height="76" viewBox="0 0 76 76" role="img" aria-label="Plan completed: ${pct} percent of planned reps"><circle cx="38" cy="38" r="31" fill="none" stroke="var(--surface2)" stroke-width="8"/><circle cx="38" cy="38" r="31" fill="none" stroke="${pct >= 95 ? 'var(--good)' : pct >= 85 ? 'var(--warn)' : 'var(--bad)'}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${((C * Math.min(100, pct)) / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 38 38)"/><text x="38" y="38" text-anchor="middle" font-size="18" font-weight="800" fill="var(--text)">${pct}%</text><text x="38" y="53" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--muted)">OF PLAN</text></svg>`;
+  let h = `<div class="card"><div class="row between" style="align-items:flex-start;gap:12px"><div><div class="eyebrow">${esc(eyebrow)}</div><div class="b" style="font-size:30px;line-height:1.08;margin:2px 0 4px">${esc(w.title)}</div><div class="small muted">${esc(r.exercises.slice(0, 3).map((x) => x.name).join(', '))}${r.exercises.length > 3 ? ` +${r.exercises.length - 3}` : ''}</div></div>${ring}</div>
+    <div style="font-size:16.5px;line-height:1.4;font-weight:600;margin-top:10px">${esc(r.verdict)}</div></div>`;
+  const vol = r.vsLast && r.vsLast.volumePct != null ? `<span class="${r.vsLast.volumePct > 0 ? 'ok-t' : r.vsLast.volumePct < 0 ? 'warn-t' : ''}">${r.vsLast.volumePct > 0 ? '▲' : r.vsLast.volumePct < 0 ? '▼' : '='} ${Math.abs(r.vsLast.volumePct)}% vs last ${esc(w.title)}</span>` : 'first session of this workout';
+  h += `<div class="rv-tiles"><div class="rv-tile"><span>DURATION</span><b>${fmtDur(r.durationMin)}</b><em>${r.fromGarmin ? 'from Garmin' : 'from the logger'}</em></div>
+    <div class="rv-tile"><span>VOLUME</span><b>${r.volume.toLocaleString()} kg</b><em>${vol}</em></div>
+    <div class="rv-tile"><span>AVG EFFORT</span><b>${r.avgRpe != null ? `RPE ${r.avgRpe}` : '–'}</b><em>${r.vsTarget == null ? 'no RPE logged' : r.vsTarget > 0.5 ? `<span class="warn-t">+${r.vsTarget} over target</span>` : r.vsTarget < -1 ? `${r.vsTarget} under target` : 'on target'}</em></div>
+    <div class="rv-tile"><span>HEART RATE</span><b>${r.avgHr ? `${r.avgHr} <small>avg</small>` : '–'}</b><em>${r.maxHr ? `max ${r.maxHr} bpm` : 'import Garmin to see HR'}</em></div></div>`;
+  const topHl = r.highlights.filter((hl, i, a) => a.findIndex((y) => y.exercise === hl.exercise) === i).slice(0, 3);
+  if (topHl.length) h += `<div class="card"><span class="rv-h">HIGHLIGHTS</span>${topHl.map((hl) => `<div class="rv-hl"><span class="rv-ic" aria-hidden="true">${hl.kind === 'reps' ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6-5.3-3-5.3 3 1.2-6L3.4 9.3l6-.7z"/></svg>' : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>'}</span><div><div class="b" style="font-size:15px">${esc(hl.exercise)} · ${esc(hl.text)}</div><div class="small muted">${esc(hl.sub)}</div></div></div>`).join('')}</div>`;
+  h += effortChart(r);
+  h += '<h2>Exercises</h2>' + r.exercises.map(exerciseCard).join('');
+  if (r.vsLast) {
+    const row = (k, a, b, d, cls = '') => `<span class="muted">${k}</span><span class="n">${a}</span><span class="n b">${b}</span><span class="n b ${cls}">${d}</span>`;
+    const dv = r.vsLast.volumePct; const dr = r.avgRpe != null && r.vsLast.avgRpe != null ? Math.round((r.avgRpe - r.vsLast.avgRpe) * 10) / 10 : null;
+    h += `<div class="card"><span class="rv-h">VS LAST ${esc(String(w.title).toUpperCase())} · ${esc(fmtDate(r.vsLast.date).toUpperCase())}</span><div class="rv-cmp"><span></span><span class="rv-th n">THEN</span><span class="rv-th n">NOW</span><span class="rv-th n">CHANGE</span>
+      ${row('Volume', r.vsLast.volume.toLocaleString(), r.volume.toLocaleString(), dv == null ? '–' : `${dv > 0 ? '▲' : dv < 0 ? '▼' : ''} ${Math.abs(dv)}%`, dv > 0 ? 'ok-t' : '')}
+      ${row('Avg RPE', r.vsLast.avgRpe ?? '–', r.avgRpe ?? '–', dr == null ? '–' : `${dr > 0 ? '+' : ''}${dr}`)}
+      ${row('Duration', fmtDur(r.vsLast.durationMin), fmtDur(w.durationMin), r.vsLast.durationMin && w.durationMin ? `${Math.round(w.durationMin - r.vsLast.durationMin) > 0 ? '+' : ''}${Math.round(w.durationMin - r.vsLast.durationMin)} min` : '–')}</div></div>`;
+  }
+  const ms = Object.entries(r.muscles).sort((a, b) => b[1] - a[1]);
+  h += `<div class="card"><span class="rv-h">MUSCLES WORKED · SETS</span><div class="chips" style="flex-wrap:wrap;margin:8px 0 0">${ms.map(([m, n]) => `<span class="chip" style="text-transform:capitalize">${esc(m)} ${n1(n)}</span>`).join('')}</div>
+    ${r.pain.length ? r.pain.map((p) => `<div class="callout bad" style="margin-top:8px">Pain ${p.severity}/10 · ${esc(p.name)}${p.region ? ` (${esc(p.region)})` : ''}</div>`).join('') : '<div class="small ok-t b" style="margin-top:8px">✓ No pain logged</div>'}
+    ${w.notes ? `<div class="small muted" style="margin-top:8px">${esc(w.notes)}</div>` : ''}</div>`;
+  h += `<button class="btn primary block" data-act="copyreview" data-d="${esc(w.date)}">Copy analysis for coach</button>
+    <div class="grid2" style="margin-top:8px"><button class="btn" data-act="editworkout" data-id="${esc(w.id)}">Edit sets</button><button class="btn" data-act="exportday" data-d="${esc(w.date)}">Export this day</button></div>
+    <button class="btn danger block sm" data-act="delworkout" data-id="${esc(w.id)}" style="margin-top:8px">Delete this workout</button>`;
+  return h;
 }
 
 // ---------- DAY STATUS ----------
@@ -890,11 +993,22 @@ function buildPost(w, before) {
   let verdict = plannedSets ? (doneSets < plannedSets ? `${doneSets} of ${plannedSets} planned working sets done.` : `All ${plannedSets} planned working sets done.`) : `${doneSets} working sets logged.`;
   if (meanRpe != null) verdict += meanRpe >= 9 ? ` Average RPE ${n1(meanRpe)} is high: hold loads next time.` : meanRpe <= 7 ? ` Average RPE ${n1(meanRpe)} leaves room to progress.` : ` Average RPE ${n1(meanRpe)} is in the productive range.`;
   else verdict += ' No RPE recorded, so progression stays conservative.';
-  return { title: w.title, verdict, rows, lines, duration: w.durationMin, vol: Math.round(w.exercises.reduce((s, e) => s + E.volumeLoad(e), 0)), sets: doneSets, prs: rows.filter((r) => r.pr).length };
+  return { id: w.id, title: w.title, verdict, rows, lines, duration: w.durationMin, vol: Math.round(w.exercises.reduce((s, e) => s + E.volumeLoad(e), 0)), sets: doneSets, prs: rows.filter((r) => r.pr).length };
 }
 
 function postView() {
   const p = S.post;
+  const w = p.id && S.data.workouts.find((x) => x.id === p.id);
+  if (w) {
+    const r = reviewData(w);
+    let h = `<div style="text-align:center;padding:8px 0 4px"><span class="rv-done"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></span>
+      <div class="b" style="font-size:26px;margin-top:6px">${esc(w.title)} done</div><div class="small muted">${fmtDate(w.date)} · ${fmtDur(r.durationMin)} · ${r.doneSets} sets</div></div>
+      <div class="card"><div style="font-size:16px;line-height:1.4;font-weight:600">${esc(r.verdict)}</div>
+      <div class="rv-mini">${miniTile('Plan', r.completion != null ? `${r.completion}%` : '–')}${miniTile('Effort', r.avgRpe ?? '–')}${miniTile('Volume', r.vsLast && r.vsLast.volumePct != null ? `${r.vsLast.volumePct > 0 ? '▲ ' : r.vsLast.volumePct < 0 ? '▼ ' : ''}${Math.abs(r.vsLast.volumePct)}%` : `${r.volume.toLocaleString()} kg`, r.vsLast && r.vsLast.volumePct > 0 ? 'up' : '')}</div>
+      ${r.exercises.filter((x) => !x.skipped && x.next && (x.next.action !== 'Hold' || x.short)).slice(0, 3).map((x) => `<div class="row between small" style="margin-top:6px;gap:8px"><span>${esc(x.name)}</span>${nextChip(x)}</div>`).join('')}</div>`;
+    p.lines.forEach((l) => { h += `<div class="callout bad" style="margin-bottom:12px">${esc(l)}</div>`; });
+    return h + `<button class="btn primary block" data-act="postreview" data-id="${esc(w.id)}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>See full review</button><button class="btn block" data-act="closepost" style="margin-top:8px">Done</button>`;
+  }
   let h = `<div class="card"><div class="big">${esc(p.title)}</div><div class="stats" style="margin-top:10px"><div class="stat"><span>Duration</span><b>${fmtDur(p.duration)}</b></div><div class="stat"><span>Volume</span><b>${p.vol.toLocaleString()} kg</b></div><div class="stat"><span>${p.prs ? 'PRs' : 'Sets'}</span><b>${p.prs || p.sets}</b></div></div>
     <div class="callout info"><b>Verdict.</b> ${esc(p.verdict)}</div></div>`;
   p.lines.forEach((l) => { h += `<div class="callout bad" style="margin-bottom:12px">${esc(l)}</div>`; });
@@ -1516,7 +1630,9 @@ function meView(ctx) {
   return h + `<div class="card"><h3>Export</h3><div class="small muted" style="margin:4px 0 10px">A day, a week, a training block or any dates, as a spreadsheet, PDF report, coach text or raw data.</div><button class="btn primary block" data-act="openexport">Export data…</button></div>
     <div class="card"><h3>On this phone</h3><div class="small muted" style="margin-top:4px">${d.cardio.length} Garmin/cardio activities · ${d.workouts.length} logged lifting sessions · ${d.sleep.length} sleep weeks · ${d.rhr.length} resting-HR weeks · ${d.checkins.length} check-ins</div>
     <div class="tiny faint" style="margin-top:6px">${S.lastBackup ? `Last backup ${fmtDate(S.lastBackup.slice(0, 10))}.` : 'No backup yet.'} Clearing Chrome's site data erases everything, so back up weekly to Google Drive or email.</div>
-    <button class="btn primary block" data-act="backup" style="margin-top:12px">Download backup</button>
+    <button class="btn primary block" data-act="backupto" style="margin-top:12px">Save backup to…</button>
+    <div class="tiny muted" style="margin:2px 0 8px">${window.showSaveFilePicker ? 'Pick the folder and file name.' : 'Opens your share menu: choose <b>Drive</b> to pick a folder, or another app.'}</div>
+    <button class="btn block sm" data-act="backup">Download to Downloads folder</button>
     <label class="btn block" style="cursor:pointer">Restore from backup<input type="file" data-act="restore" hidden></label></div>
     <div class="card"><h3>Import from Garmin & Hevy</h3><div class="tiny muted">Re-importing the same file is safe; entries merge by date and time.</div>
     <label class="btn block sm" style="cursor:pointer;margin-top:10px">Garmin activities CSV<input type="file" data-act="impgarmin" hidden></label>
@@ -1580,8 +1696,8 @@ function exportView() {
   const canShare = !!navigator.share;
   if (x.fmt === 'pdf') h += '<button class="btn primary block" data-act="expgo" data-how="view">Open report</button>';
   else if (x.fmt === 'coach') h += '<button class="btn primary block" data-act="expgo" data-how="copy">Copy for coach</button>' + (canShare ? '<button class="btn block" data-act="expgo" data-how="share">Share as text…</button>' : '');
-  else h += (canShare ? '<button class="btn primary block" data-act="expgo" data-how="share">Share…</button>' : '') + `<button class="btn ${canShare ? '' : 'primary '}block" data-act="expgo" data-how="download">Download</button>`;
-  h += '<div class="tiny faint" style="text-align:center;margin-top:8px">Share sends the file to Drive, email, WhatsApp, etc. Download saves it to your phone\'s Downloads folder.</div>';
+  else h += '<button class="btn primary block" data-act="expgo" data-how="saveto">Save to…</button><button class="btn block" data-act="expgo" data-how="download">Download to Downloads</button>';
+  h += `<div class="tiny faint" style="text-align:center;margin-top:8px">${window.showSaveFilePicker ? 'Save to… lets you pick the folder and file name.' : 'Save to… opens your share menu: choose Drive to pick a folder, or email, WhatsApp, etc.'} Download always goes to the Downloads folder.</div>`;
   return h;
 }
 function expIncluded() { const i = expState().inc; return Object.values(i).some(Boolean); }
@@ -1597,6 +1713,30 @@ function expFiles() {
   if (names.length === 1) return { name: `${base}_${names[0]}.csv`, type: 'text/csv', data: X.toCSV(tables[names[0]]) };
   const zip = X.makeZip(names.map((k) => ({ name: `${k}.csv`, text: X.toCSV(tables[k]) })));
   return { name: `${base}.zip`, type: 'application/zip', data: zip };
+}
+// Let the user choose where a file goes. Desktop Chrome: a real folder + name picker. Android: the share menu
+// (Drive lets you pick a folder). Android only shares a few file types, so a .json backup is sent as .txt if
+// needed; Restore reads either. Last resort: the Downloads folder.
+async function saveTo(f) {
+  const blob = new Blob([f.data], { type: f.type });
+  if (window.showSaveFilePicker) {
+    try {
+      const ext = f.name.split('.').pop();
+      const h = await window.showSaveFilePicker({ suggestedName: f.name, types: [{ description: 'Max Effort file', accept: { [f.type]: [`.${ext}`] } }] });
+      const wr = await h.createWritable(); await wr.write(blob); await wr.close();
+      toast(`Saved ${h.name}.`); return true;
+    } catch (e) { if (e && e.name === 'AbortError') return false; }
+  }
+  if (navigator.share && navigator.canShare) {
+    const tries = [new File([blob], f.name, { type: f.type }), new File([blob], f.name.replace(/\.json$/, '.txt'), { type: 'text/plain' })];
+    for (const file of tries) {
+      if (!navigator.canShare({ files: [file] })) continue;
+      try { await navigator.share({ files: [file], title: file.name }); toast(`Sent ${file.name}. Restore accepts it as is.`); return true; } catch (e) { if (e && e.name === 'AbortError') return false; }
+    }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast(`This phone can't pick a folder here, so ${f.name} went to Downloads.`); return true;
 }
 async function shareOrDownload(f, how) {
   const blob = new Blob([f.data], { type: f.type });
@@ -1625,6 +1765,7 @@ async function runExport(how) {
     try { await navigator.clipboard.writeText(txt); toast('Copied. Paste it into Claude or Gemini.'); } catch { await shareOrDownload({ name: `max-effort_${sl.range.from}_coach.txt`, type: 'text/plain', data: txt }, 'download'); }
     return;
   }
+  if (how === 'saveto') { await saveTo(expFiles()); return; }
   await shareOrDownload(expFiles(), how);
 }
 function renderReport() {
@@ -1705,6 +1846,14 @@ document.addEventListener('click', async (e) => {
       if (d.editingId ? true : confirm('Discard this workout? Logged sets will be lost.')) { S.draft = null; S.timerEnd = 0; await setMeta('draft', null); render(); }
       break;
     case 'closepost': S.post = null; S.tab = 'home'; render(); window.scrollTo(0, 0); break;
+    case 'postreview': S.post = null; S.tab = 'home'; S.detail = `w:${t.dataset.id}`; render(); window.scrollTo(0, 0); break;
+    case 'revtoggle': S.revOpen = S.revOpen || {}; S.revOpen[t.dataset.k] = !S.revOpen[t.dataset.k]; render(); break;
+    case 'copyreview': {
+      const d = t.dataset.d; const sl = X.sliceData({ ...S.data, skips: S.skips }, X.resolveRange({ kind: 'day', day: d }, { today: todayStr(), weekStart: S.settings.weekStart, blocks: S.settings.blocks }));
+      const txt = X.coachText(sl, COACH_PROMPT, { athlete: athleteInfo(), bodyweightKg: S.settings.bodyweight, maxHr: S.settings.maxHr });
+      try { await navigator.clipboard.writeText(txt); toast('Copied. Paste it into Claude or Gemini.'); } catch { await shareOrDownload({ name: `max-effort_${d}_session.txt`, type: 'text/plain', data: txt }, 'share'); }
+      break;
+    }
     case 'editworkout': editWorkout(t.dataset.id); break;
     case 'delworkout': if (confirm('Delete this workout permanently?')) { await db.del('workouts', t.dataset.id); S.data.workouts = S.data.workouts.filter((w) => w.id !== t.dataset.id); S.detail = null; render(); } break;
     case 'delcardio': if (confirm('Delete this activity permanently?')) { await db.del('cardio', t.dataset.id); S.data.cardio = S.data.cardio.filter((c) => c.id !== t.dataset.id); S.detail = null; render(); } break;
@@ -1790,6 +1939,13 @@ document.addEventListener('click', async (e) => {
       await db.put('injuries', inj); S.data.injuries.push(inj); render(); break;
     }
     case 'maxhrauto': S.settings.maxHrManual = false; if (S.maxHrObserved) S.settings.maxHr = S.maxHrObserved; await saveSettings(); render(); break;
+    case 'backupto': {
+      const name = `max-effort-backup-${todayStr()}.json`;
+      const data = JSON.stringify({ ...(await db.exportAll()), app: 'max-effort', plan: exportPlan() });
+      const ok = await saveTo({ name, type: 'application/json', data });
+      if (ok) { S.lastBackup = new Date().toISOString(); await setMeta('lastBackup', S.lastBackup); render(); }
+      break;
+    }
     case 'backup': download(`max-effort-backup-${todayStr()}.json`, JSON.stringify({ ...(await db.exportAll()), app: 'max-effort', plan: exportPlan() })); S.lastBackup = new Date().toISOString(); await setMeta('lastBackup', S.lastBackup); render(); toast('Backup saved to Downloads. Move it to Drive.'); break;
     case 'imprhr': { const rows = parseRestingHr($('#rhr-paste').value, new Date().getFullYear()); if (!rows.length) { toast('No weeks recognised.'); return; } await db.putMany('rhr', rows); S.data.rhr = await db.all('rhr'); toast(`Imported ${rows.length} weeks.`); render(); break; }
     case 'wipe': if (confirm('Erase ALL training data on this phone? Download a backup first.')) { for (const s of ['workouts', 'cardio', 'checkins', 'injuries', 'sleep', 'rhr', 'meta']) await db.clear(s); location.reload(); } break;

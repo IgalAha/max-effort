@@ -1,4 +1,4 @@
-# Max Effort — v10.0
+# Max Effort — v10.1
 
 Personal training app for strength, running and MTB: Hevy-style workout logger with RPE-based progression,
 editable 5-week plan, Garmin-based activity feed and training load, recovery status, injury log and a coach packet
@@ -116,6 +116,15 @@ Load steps: 2.5 kg for barbell and dumbbell lifts, 0.5 kg for the cable lateral 
 
 ## Changes in v9.5
 - Log cardio › Counts as: lists every cardio day of the week. Skipped days show "(was skipped)"; logging one marks it done and removes the skip. Defaults to the earliest open or skipped cardio day.
+
+## Changes in v10.1
+- Workout review: tap any lifting session (Home › Recent, or "See full review" after Finish).
+  - Verdict, % of plan done, duration, volume vs the last session of the same workout, effort vs target and heart rate.
+  - Highlights (all-time best, best since…, heaviest, rep record) and an RPE chart for every set against target.
+  - Per exercise: planned vs done for each set, an e1RM trend, and "next time".
+  - Muscles worked, pain, "Copy analysis for coach", edit, export and delete.
+- After Finish: a short summary with "See full review".
+- Save backup to… (Me › Data) and Save to… for exports. Desktop picks a folder; Android opens the share menu (Drive lets you choose a folder). Download to Downloads is still there.
 
 ## Changes in v10.0
 - Next bar: a blue "NEXT · Day N · <workout> · Start" bar above the tabs on every tab except Home. It shows "IN PROGRESS · Resume" while a workout is open.
