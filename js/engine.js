@@ -1,6 +1,6 @@
 // Deterministic coaching rules. No DOM, no storage: pure functions over plain data.
 // Everything here is either MEASURED (straight from logs) or ESTIMATED (flagged as such).
-import { EXERCISES } from './plan.js';
+import { EXERCISES, DAYS } from './plan.js';
 
 export const round1 = (x) => Math.round(x * 10) / 10;
 export const roundTo = (x, step) => Math.round(x / step) * step;
@@ -38,7 +38,7 @@ export function exerciseHistory(workouts, key) {
   return workouts
     .filter((w) => w.exercises.some((e) => e.key === key && workSets(e).length))
     .sort((a, b) => (a.date + a.start < b.date + b.start ? 1 : -1))
-    .map((w) => ({ date: w.date, ex: w.exercises.find((e) => e.key === key), planRef: w.planRef || null }));
+    .map((w) => ({ date: w.date, start: w.start || '00:00', ex: w.exercises.find((e) => e.key === key), planRef: w.planRef || null }));
 }
 
 // History for a plan exercise. A day's own copy of an exercise ("split" from a shared one) also counts the original's
@@ -70,9 +70,14 @@ const isHardEndurance = (c) => ['run', 'mtb', 'ride', 'hike'].includes(c.type) &
 
 // How far above/below the plan you actually lifted, from the latest non-deload session that recorded plan loads.
 // This is what makes progression accumulate: next time = plan + carried + adjustment.
-export function carriedOffset(history, step = 2.5) {
+// When you change an exercise's weights in the plan (by hand, by accepting a plan update, or by applying the
+// next-block progression), your new numbers are the baseline: sessions logged before that edit no longer carry
+// their +/- over, so nothing is counted twice.
+export const planEditedAt = (key) => { for (const d of DAYS) for (const e of d.exercises || []) if (e.id === key && e.editedAt) return e.editedAt; return null; };
+export function carriedOffset(history, step = 2.5, editedAt = null) {
   for (const h of history.slice(0, 6)) {
     if (h.planRef && h.planRef.week === 4) continue;
+    if (editedAt && `${h.date}T${h.start || '00:00'}` < editedAt) return 0;
     const ws = workSets(h.ex).filter((x) => x.planWeight != null && x.weight != null);
     if (!ws.length) continue;
     return roundTo(mean(ws.map((x) => x.weight - x.planWeight)), step);
@@ -104,7 +109,10 @@ export function suggestExercise({ key, history, today, week, recovery, bodyweigh
   const flags = [];
   const rpeTarget = week === 4 ? Math.min(meta.rpe, 7) : meta.rpe;
   const hist = history.slice(0, 3);
-  const carried = carriedOffset(history, step);
+  const editedAt = planEditedAt(key);
+  const rawCarried = carriedOffset(history, step);
+  const carried = carriedOffset(history, step, editedAt);
+  if (rawCarried !== carried) flags.push(`You changed this exercise's weights in the plan since your last session, so your new plan numbers are used as they are (the ${rawCarried > 0 ? '+' : ''}${rawCarried} kg from last time isn't added on top).`);
   let lastInfo = null;
   const out = (action, delta) => { const d = roundTo(delta, step); return { action, delta: d === 0 ? 0 : d, carried, rpeTarget, why, flags, last: lastInfo }; };
 

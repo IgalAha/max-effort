@@ -6,7 +6,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.1';
+const APP_VERSION = '10.2';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -293,9 +293,10 @@ function homeView(ctx) {
   } else {
     h += `<p class="small" style="margin:10px 0 0">${esc(day.note || '')}</p><div class="daynav" style="grid-template-columns:2fr 1fr;margin-top:12px"><button class="btn primary" data-act="restdone">Rest day done</button><button class="btn" data-act="skipopen" data-d="${p.dayIdx}">Skip</button></div>`;
   }
-  h += `<div class="strip" role="group" aria-label="Days this week">${DAYS.map((d, i) => `<button data-act="daysheet" data-d="${i}" class="${i === p.dayIdx ? 'now' : dayState(i) === 'done' ? 'past' : dayState(i) === 'skipped' ? 'skip' : ''}" aria-label="${esc(d.name)}: ${dayState(i) || 'to do'}. Tap to see or change" ${i === p.dayIdx ? 'aria-current="true"' : ''}><b>${i + 1}</b>${esc(shortDay(d).split(' ')[0].slice(0, 7))}</button>`).join('')}</div>
+  const wd = weekDates();
+  h += `<div class="strip" role="group" aria-label="Days this week" style="grid-template-columns:repeat(${DAYS.length},minmax(0,1fr))">${DAYS.map((d, i) => `<button data-act="daysheet" data-d="${i}" class="${i === p.dayIdx ? 'now' : dayState(i) === 'done' ? 'past' : dayState(i) === 'skipped' ? 'skip' : ''}" aria-label="${esc(d.name)}: ${dayState(i) || 'to do'}${wd[i] ? `, ${wd[i].kind === 'plan' ? 'planned for' : wd[i].kind === 'today' ? 'today' : 'on'} ${shortDate(wd[i].date)}` : ''}. Tap to see or change" ${i === p.dayIdx ? 'aria-current="true"' : ''}><b>${i + 1}</b>${esc(shortDay(d).split(' ')[0].slice(0, 7))}<i class="sd ${wd[i] ? wd[i].kind : ''}">${wd[i] ? (wd[i].kind === 'today' ? 'Today' : shortDate(wd[i].date)) : '–'}</i></button>`).join('')}</div>
     <div class="daynav"><button class="btn sm" data-act="prevday">‹ Back a day</button><button class="btn sm" data-act="skipday">Next day ›</button></div>
-    <div class="row between" style="margin-top:2px"><span class="tiny faint"><span style="color:var(--good)">■</span> done · <span style="color:var(--faint)">■</span> skipped · tap a day to see or change it</span><button class="linkbtn" data-act="goplan">Full plan</button></div></div>`;
+    <div class="row between" style="margin-top:2px"><span class="tiny faint"><span style="color:var(--good)">■</span> done · <span style="color:var(--faint)">■</span> skipped · <i>italic date</i> = planned · tap a day to see or change it</span><button class="linkbtn" data-act="goplan">Full plan</button></div></div>`;
 
   // Recovery + check-in
   h += recoveryCard(ctx, false);
@@ -460,13 +461,35 @@ async function applyNextBlock() {
   const rows = E.blockProgression({ workouts: S.data.workouts, days: DAYS, blockStart: r.from, end: r.to, bodyweight: S.settings.bodyweight });
   S.planBeforeProgress = exportPlan(); await setMeta('planBeforeProgress', S.planBeforeProgress);
   let n = 0;
-  for (const x of rows) if (x.pct) { progressExercise(DAYS[x.dayIdx].exercises[x.k], x.pct, x.step, true); n++; }
+  for (const x of rows) if (x.pct) { progressExercise(DAYS[x.dayIdx].exercises[x.k], x.pct, x.step, true); stampEdit(DAYS[x.dayIdx].exercises[x.k]); n++; }
   await setMeta('plan', exportPlan());
   S.settings.pendingProgress = null; await saveSettings();
   S.progView = false; render(); window.scrollTo(0, 0);
   toast(n ? `Next block set: ${n} exercise${n > 1 ? 's' : ''} progressed.` : 'No changes: loads stay the same.');
 }
 
+// The calendar date for each day in this plan week: when it was done or skipped, or, for days still to come,
+// a projection (the next day today, or tomorrow if a plan day is already done today, then one per day).
+function weekDates() {
+  const t = todayStr(); const L = weekLog(); const out = DAYS.map(() => null);
+  const recent = (d) => d && d <= t && E.daysBetween(d, t) <= 14;
+  DAYS.forEach((d, i) => {
+    const st = dayState(i);
+    if (st === 'done') {
+      let dt = (L.doneOn || {})[d.id];
+      if (!dt) { const w = S.data.workouts.filter((x) => x.planRef && x.planRef.week === S.settings.week && dayIndexOf(x.planRef) === i && recent(x.date)).sort((a, b) => (a.date < b.date ? 1 : -1))[0]; if (w) dt = w.date; }
+      if (!dt) { const c = S.data.cardio.filter((x) => x.planDayId === d.id && recent(x.date)).sort((a, b) => (a.date < b.date ? 1 : -1))[0]; if (c) dt = c.date; }
+      out[i] = dt ? { date: dt, kind: 'done' } : null;
+    } else if (st === 'skipped') {
+      const k = (S.skips || []).filter((x) => x.week === S.settings.week && dayIndexOf(x) === i && recent(x.date)).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      out[i] = k ? { date: k.date, kind: 'skip' } : null;
+    }
+  });
+  let cur = doneTodayIdx().length ? E.addDays(t, 1) : t;
+  for (let i = pos().dayIdx; i < DAYS.length; i++) if (!dayState(i)) { out[i] = { date: cur, kind: cur === t ? 'today' : 'plan' }; cur = E.addDays(cur, 1); }
+  return out;
+}
+const shortDate = (iso) => { const d = new Date(`${iso}T12:00:00`); return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${d.getDate()}`; };
 const dayCls = (i) => (i === pos().dayIdx && !dayState(i) ? 'nextday' : dayState(i) === 'done' ? 'doneday' : '');
 // The blue bar above the tabs: what's next (or the workout in progress), one tap to start it, on every tab but Home.
 function nextBarHtml() {
@@ -491,6 +514,8 @@ function renderNextBar() {
   document.body.classList.toggle('has-nextbar', !!h);
 }
 
+// Mark an exercise's plan weights as changed now: from here on the plan numbers are the baseline (see engine carriedOffset).
+const stampEdit = (ex) => { if (ex) ex.editedAt = `${todayStr()}T${nowHHMM()}`; };
 // ---------- WORKOUT REVIEW ----------
 const miniTile = (k, v, cls = '') => `<div class="rv-mt"><span>${esc(k)}</span><b class="${cls}">${esc(String(v))}</b></div>`;
 function reviewNext(key, w) {
@@ -717,7 +742,7 @@ function startDay(dayIdx) {
   const week = S.settings.week;
   const day = DAYS[dayIdx];
   S.draft = {
-    id: `app-${Date.now()}`, source: 'app', date: ctx.t, start: nowHHMM(), startedAt: Date.now(), title: day.title,
+    id: `app-${Date.now()}`, source: 'app', date: ctx.t, start: nowHHMM(), startedAt: Date.now(), title: day.title || shortDay(day),
     planRef: { week, dayIdx, dayId: day.id }, sessionRpe: null, notes: '',
     exercises: expandWeek(dayIdx, week).map((ex) => draftExercise(ex.id, ex.name, ex.sets, ctx, week)),
   };
@@ -1121,7 +1146,11 @@ function pickExercise(key, name) {
     setTimeout(() => toast(`${DAYS[pk.day].name}: ${oldName} → ${EXERCISES[k].name}. Sets, reps and loads kept, so check the kg.`), 300);
   } else if (pk.mode === 'plan') {
     const k = ownId(ensureCatalog(key, name), S.editDay);
-    DAYS[S.editDay].exercises.push({ id: k, weeks: [0, 1, 2, 3, 4].map(() => [{ sets: 3, reps: 10, weight: 0 }]) });
+    // Start from your last logged session of this exercise when there is one, else an empty 3x10 to fill in.
+    const last = E.historyFor(S.data.workouts, k)[0];
+    const groups = last ? fmtGroups(E.workSets(last.ex)).map((x) => ({ sets: x.n, reps: x.reps, weight: x.w })) : [{ sets: 3, reps: 10, weight: 0 }];
+    DAYS[S.editDay].exercises.push({ id: k, weeks: [0, 1, 2, 3, 4].map(() => JSON.parse(JSON.stringify(groups))) });
+    if (last) setTimeout(() => toast(`Filled every week from your last ${EXERCISES[k].name} session (${fmtDate(last.date)}). Adjust as needed.`), 300);
     splitShared(todayStr()); savePlan();
   }
   render();
@@ -1267,6 +1296,18 @@ function onPlanField(el) {
     if (f === 'wreps') d.exercises[k].warm.reps = Math.round(v);
     else if (f === 'wweight') d.exercises[k].warm.weight = v;
     else d.exercises[k].weeks[w][+el.dataset.g][f] = f === 'weight' ? v : Math.max(0, Math.round(v));
+    const ex = d.exercises[k];
+    if (f === 'weight') stampEdit(ex);
+    // Weeks that are still the empty 0 kg placeholder copy the week you just filled in, so later weeks and the
+    // next block start from real numbers.
+    if (f !== 'wreps' && f !== 'wweight' && ex.weeks[w].some((g) => g.weight > 0)) {
+      const filled = [];
+      for (let ow = 0; ow < 5; ow++) {
+        if (ow === w || (ow === 4 && PLAN_OPTS.deload !== 'manual')) continue;
+        if (ex.weeks[ow].every((g) => !g.weight)) { ex.weeks[ow] = JSON.parse(JSON.stringify(ex.weeks[w])); filled.push(ow + 1); }
+      }
+      if (filled.length) toast(`Also filled Week ${filled.join(', ')} (they were empty) with these numbers.`);
+    }
     savePlan(); return true;
   }
   if (el.dataset.ef) {
@@ -1871,7 +1912,7 @@ document.addEventListener('click', async (e) => {
     case 'grpdel': { const g = DAYS[S.editDay].exercises[k].weeks[S.planWeek]; if (g.length > 1) { g.splice(+t.dataset.g, 1); savePlan(); render(); } else toast('Keep at least one row. Remove the exercise instead.'); break; }
     case 'warmadd': { const ex = DAYS[S.editDay].exercises[k]; const w0 = ex.weeks[S.planWeek][0]; ex.warm = { sets: 1, reps: 7, weight: r05((w0 ? w0.weight : 20) * 0.6) }; savePlan(); render(); break; }
     case 'warmdel': delete DAYS[S.editDay].exercises[k].warm; savePlan(); render(); break;
-    case 'copyweeks': { const ex = DAYS[S.editDay].exercises[k]; if (confirm(`Copy Week ${S.planWeek + 1} rows to all five weeks for this exercise?`)) { const src = JSON.stringify(ex.weeks[S.planWeek]); ex.weeks = [0, 1, 2, 3, 4].map(() => JSON.parse(src)); savePlan(); toast('Copied to all weeks.'); render(); } break; }
+    case 'copyweeks': { const ex = DAYS[S.editDay].exercises[k]; if (confirm(`Copy Week ${S.planWeek + 1} rows to all five weeks for this exercise?`)) { const src = JSON.stringify(ex.weeks[S.planWeek]); ex.weeks = [0, 1, 2, 3, 4].map(() => JSON.parse(src)); stampEdit(ex); savePlan(); toast('Copied to all weeks.'); render(); } break; }
     case 'planaddex': S.picker = { mode: 'plan' }; S.pickQ = ''; renderOverlay(); setTimeout(() => $('#pk-q') && $('#pk-q').focus(), 50); break;
     case 'daymove': { const n = S.editDay + +t.dataset.v; if (n >= 0 && n < DAYS.length) { const from = S.editDay; await reorderDays(() => moveDay(from, n)); S.editDay = n; render(); } break; }
     case 'ordopen': S.splitOrder = true; render(); window.scrollTo(0, 0); break;
