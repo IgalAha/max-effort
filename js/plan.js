@@ -219,3 +219,72 @@ export function dayIndexOf(ref) {
   }
   return ref.dayIdx != null && ref.dayIdx < DAYS.length ? ref.dayIdx : -1;
 }
+
+// ---- plan updates published with the app (updates/plan-update.json) ----
+// Each op says what to change and is checked against YOUR current plan first: if it's already that way it is
+// reported as done, if what it needs isn't there it is skipped. Works on a copy; the caller decides to keep it.
+export function applyPlanOps(plan, ops, stamp = null) {
+  const p = JSON.parse(JSON.stringify(plan));
+  const day = (id) => p.days.find((d) => d.id === id);
+  const results = [];
+  const res = (op, status, note = '') => results.push({ desc: op.desc || op.op, status, note });
+  for (const op of ops || []) {
+    try {
+      if (op.op === 'move') {
+        const to = day(op.toDay);
+        const from = p.days.find((d) => (d.exercises || []).some((e) => e.id === op.exercise));
+        if (!to || !from) { res(op, 'skip', !to ? 'That day is no longer in your plan.' : 'That exercise is no longer in your plan.'); continue; }
+        const idx = Math.max(0, Math.min(op.index ?? 0, (to.exercises || []).length));
+        if (from === to && to.exercises.findIndex((e) => e.id === op.exercise) === idx) { res(op, 'done'); continue; }
+        const slot = from.exercises.splice(from.exercises.findIndex((e) => e.id === op.exercise), 1)[0];
+        to.exercises = to.exercises || [];
+        to.exercises.splice(Math.min(idx, to.exercises.length), 0, slot);
+        res(op, 'apply');
+      } else if (op.op === 'dayTitle' || op.op === 'dayName') {
+        const d = day(op.day); const f = op.op === 'dayTitle' ? 'title' : 'name'; const v = op.op === 'dayTitle' ? op.title : op.name;
+        if (!d) { res(op, 'skip', 'That day is no longer in your plan.'); continue; }
+        if (d[f] === v) { res(op, 'done'); continue; }
+        if (op.onlyIfEmpty && d[f]) { res(op, 'skip', `Kept your own: “${d[f]}”.`); continue; }
+        d[f] = v; res(op, 'apply');
+      } else if (op.op === 'weeks') {
+        const d = day(op.day); const ex = d && (d.exercises || []).find((e) => e.id === op.exercise);
+        if (!ex) { res(op, 'skip', 'That exercise is no longer on that day.'); continue; }
+        let changed = 0; let kept = 0;
+        for (const [w, rows] of Object.entries(op.weeks || {})) {
+          const cur = ex.weeks[+w] || [];
+          if (JSON.stringify(cur) === JSON.stringify(rows)) continue;
+          if (op.onlyIfEmpty && cur.some((g) => g.weight > 0)) { kept++; continue; }
+          ex.weeks[+w] = JSON.parse(JSON.stringify(rows)); changed++;
+        }
+        if (changed) { if (stamp) ex.editedAt = stamp; res(op, 'apply', kept ? `${kept} week(s) you had already filled were left alone.` : ''); }
+        else res(op, kept ? 'skip' : 'done', kept ? 'You had already filled those weeks, so they were left alone.' : '');
+      } else if (op.op === 'catalog') {
+        const c = p.catalog[op.exercise];
+        if (!c) { res(op, 'skip', 'That exercise is not in your plan.'); continue; }
+        const diff = Object.entries(op.set || {}).filter(([k, v]) => JSON.stringify(c[k]) !== JSON.stringify(v));
+        if (!diff.length) { res(op, 'done'); continue; }
+        for (const [k, v] of diff) c[k] = v;
+        res(op, 'apply');
+      } else if (op.op === 'addExercise') {
+        const d = day(op.day);
+        if (!d) { res(op, 'skip', 'That day is no longer in your plan.'); continue; }
+        if ((d.exercises || []).some((e) => e.id === op.exercise)) { res(op, 'done'); continue; }
+        if (op.catalog && !p.catalog[op.exercise]) p.catalog[op.exercise] = op.catalog;
+        if (!p.catalog[op.exercise]) { res(op, 'skip', 'Unknown exercise.'); continue; }
+        d.exercises = d.exercises || [];
+        const slot = { id: op.exercise, weeks: op.weeks }; if (op.warm) slot.warm = op.warm;
+        d.exercises.splice(Math.min(op.index ?? d.exercises.length, d.exercises.length), 0, slot);
+        res(op, 'apply');
+      } else if (op.op === 'removeExercise') {
+        const d = day(op.day); const i = d ? (d.exercises || []).findIndex((e) => e.id === op.exercise) : -1;
+        if (i < 0) { res(op, 'done'); continue; }
+        d.exercises.splice(i, 1); res(op, 'apply');
+      } else if (op.op === 'deload') {
+        p.opts = p.opts || {};
+        if (p.opts.deload === op.rule) { res(op, 'done'); continue; }
+        p.opts.deload = op.rule; res(op, 'apply');
+      } else res(op, 'skip', 'This app version does not know that change yet.');
+    } catch { res(op, 'skip', 'Could not be applied.'); }
+  }
+  return { plan: p, results, changes: results.filter((r) => r.status === 'apply').length };
+}

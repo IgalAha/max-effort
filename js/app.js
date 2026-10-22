@@ -1,12 +1,12 @@
 // Max Effort — UI. All coaching math lives in engine.js; this file only renders and stores.
 import { db, getMeta, setMeta } from './db.js';
-import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, weekGroups, PLAN_OPTS, DELOAD_RULES, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
+import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, weekGroups, PLAN_OPTS, DELOAD_RULES, applyPlanOps, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
 import * as E from './engine.js';
 import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv } from './importers.js';
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.2';
+const APP_VERSION = '10.3';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -116,6 +116,7 @@ async function loadAll() {
   S.lastBackup = await getMeta('lastBackup', null);
   S.skips = await getMeta('skips', []);
   S.planBeforeProgress = await getMeta('planBeforeProgress', null);
+  S.planBeforeUpdate = await getMeta('planBeforeUpdate', null);
   const plan = await getMeta('plan', null);
   if (plan) loadPlan(plan);
   if (splitShared(todayStr())) await setMeta('plan', exportPlan());
@@ -210,7 +211,8 @@ function render() {
     else if (S.cardioForm) { back = 'cardioback'; title = 'Log cardio'; body = cardioForm(ctx); }
     else body = startView(ctx);
   } else if (S.tab === 'plan') {
-    if (S.progView) { back = 'progback'; title = 'Next block'; body = nextBlockView(); }
+    if (S.updView && S.planUpdate) { back = 'updlater'; title = 'Plan update'; body = planUpdateView(); }
+    else if (S.progView) { back = 'progback'; title = 'Next block'; body = nextBlockView(); }
     else if (S.splitOrder) { back = 'orddone'; title = 'Split order'; body = splitOrderView(); }
     else if (S.editEx) { back = 'exback'; title = 'Exercise'; body = exerciseEditor(); }
     else if (S.editDay != null) { back = 'dayback'; title = 'Edit day'; body = dayEditor(); }
@@ -267,6 +269,7 @@ function homeView(ctx) {
   const daysSince = S.lastBackup ? E.daysBetween(S.lastBackup.slice(0, 10), ctx.t) : null;
   if (daysSince == null || daysSince > 14) h += `<div class="callout warn" style="margin:0 0 12px">${daysSince == null ? 'No backup yet.' : `Last backup ${daysSince} days ago.`} Your log lives only on this phone. <button class="linkbtn" data-act="gobackup" style="padding:0;color:inherit;text-decoration:underline">Back up now</button></div>`;
 
+  if (S.planUpdate && !S.updSnoozed) h += `<div class="callout info" style="margin:0 0 12px"><b>Plan update from Claude:</b> ${esc(S.planUpdate.title || 'changes to your plan')}. Review before anything changes. <button class="btn primary sm block" data-act="updopen" style="margin-top:8px">Review update</button></div>`;
   if (S.settings.pendingProgress && !S.settings.pendingProgress.snoozed) h += `<div class="callout info" style="margin:0 0 12px"><b>Block ${S.settings.pendingProgress.n} is done.</b> Review how your loads move up for this block. <button class="btn primary sm block" data-act="progopen" style="margin-top:8px">Review next block</button></div>`;
   if (installPrompt && !isStandalone()) h += '<div class="callout info row between" style="margin:0 0 12px"><span>Install Max Effort as an app on this phone.</span><button class="btn primary sm" data-act="install">Install</button></div>';
   // Today
@@ -500,7 +503,7 @@ function nextBarHtml() {
   if (S.tab === 'home') return '';
   if (S.tab === 'workout' && (S.post || S.cardioForm)) return '';
   if (S.tab === 'me' && S.exportOpen) return '';
-  if (S.tab === 'plan' && (S.progView || S.splitOrder || S.editEx || S.editDay != null)) return '';
+  if (S.tab === 'plan' && (S.progView || S.updView || S.splitOrder || S.editEx || S.editDay != null)) return '';
   const p = pos(); const d = DAYS[p.dayIdx]; if (!d) return '';
   const name = d.type === 'strength' ? (d.title || shortDay(d)) : `${shortDay(d)}${d.title ? ` · ${d.title}` : ''}`;
   const btn = d.type === 'strength' ? `<button class="nb-go" data-act="startday" data-d="${p.dayIdx}"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Start</button>`
@@ -516,6 +519,42 @@ function renderNextBar() {
 
 // Mark an exercise's plan weights as changed now: from here on the plan numbers are the baseline (see engine carriedOffset).
 const stampEdit = (ex) => { if (ex) ex.editedAt = `${todayStr()}T${nowHHMM()}`; };
+// ---------- PLAN UPDATES (published with the app) ----------
+async function checkPlanUpdate() {
+  S.updCheckedAt = Date.now();
+  try {
+    const r = await fetch(`updates/plan-update.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const u = await r.json();
+    if (!u || !u.id || !Array.isArray(u.ops)) return;
+    const done = await getMeta('appliedUpdates', []);
+    const had = !!S.planUpdate;
+    S.planUpdate = done.includes(u.id) ? null : u;
+    if (!!S.planUpdate !== had && !S.draft) render();
+  } catch { /* offline or no update published */ }
+}
+function planUpdateView() {
+  const u = S.planUpdate;
+  const { results, changes } = applyPlanOps(exportPlan(), u.ops);
+  const icon = { apply: '<span class="tag up">change</span>', done: '<span class="tag">already so</span>', skip: '<span class="tag hold">skipped</span>' };
+  let h = `<div class="card"><div class="eyebrow">From Claude${u.createdAt ? ` · ${esc(fmtDate(u.createdAt.slice(0, 10)))}` : ''}</div><div class="b" style="font-size:19px;margin:4px 0">${esc(u.title || 'Plan update')}</div>${u.note ? `<div class="small muted" style="white-space:pre-line">${esc(u.note)}</div>` : ''}</div>`;
+  h += `<h2>What changes (${changes})</h2>` + results.map((r) => `<div class="card"><div class="row between" style="gap:10px;align-items:flex-start"><div class="small" style="line-height:1.4">${esc(r.desc)}${r.note ? `<div class="tiny muted" style="margin-top:3px">${esc(r.note)}</div>` : ''}</div>${icon[r.status]}</div></div>`).join('');
+  h += changes ? '<button class="btn primary block" data-act="updapply">Apply to my plan</button>' : '<button class="btn primary block" data-act="updapply">Nothing left to change: mark as done</button>';
+  h += '<button class="btn block" data-act="updlater" style="margin-top:8px">Not now</button><div class="tiny faint" style="margin:10px 0;text-align:center">Your workouts and history are never touched. You can undo this from Plan › Manage plan.</div>';
+  return h;
+}
+async function applyPlanUpdate() {
+  const u = S.planUpdate; if (!u) return;
+  const { plan, changes } = applyPlanOps(exportPlan(), u.ops, `${todayStr()}T${nowHHMM()}`);
+  if (changes) {
+    S.planBeforeUpdate = exportPlan(); await setMeta('planBeforeUpdate', S.planBeforeUpdate);
+    loadPlan(plan); splitShared(todayStr()); await setMeta('plan', exportPlan());
+  }
+  const done = await getMeta('appliedUpdates', []); done.push(u.id); await setMeta('appliedUpdates', done);
+  S.planUpdate = null; S.updView = false; S.tab = 'plan'; render(); window.scrollTo(0, 0);
+  toast(changes ? `Plan updated: ${changes} change${changes > 1 ? 's' : ''}.` : 'Marked as done.');
+}
+
 // ---------- WORKOUT REVIEW ----------
 const miniTile = (k, v, cls = '') => `<div class="rv-mt"><span>${esc(k)}</span><b class="${cls}">${esc(String(v))}</b></div>`;
 function reviewNext(key, w) {
@@ -1214,7 +1253,7 @@ function planView() {
     });
   }
   h += `<h2>Manage plan</h2><div class="card"><label class="l" style="margin-top:0" for="deloadrule">Deload week (W5)</label><select class="f" id="deloadrule" data-act="deloadrule">${Object.entries(DELOAD_RULES).map(([k, r]) => `<option value="${k}" ${PLAN_OPTS.deload === k ? 'selected' : ''}>${esc(r.label)}: ${esc(r.desc)}</option>`).join('')}</select>
-    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}</div>
+    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}${S.planBeforeUpdate ? '<button class="btn sm block" data-act="updundo">Undo last plan update</button>' : ''}${S.planUpdate ? '<button class="btn sm block" data-act="updopen">Review plan update from Claude</button>' : ''}</div>
     <div class="card"><button class="btn primary block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
     <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" data-act="importplan" hidden></label></div>
     <button class="btn danger block sm" data-act="resetplan">Reset to original plan</button></div>`;
@@ -1919,6 +1958,10 @@ document.addEventListener('click', async (e) => {
     case 'progopen': S.tab = 'plan'; S.progView = true; S.editDay = null; S.editEx = null; render(); window.scrollTo(0, 0); break;
     case 'progback': S.progView = false; if (S.settings.pendingProgress && S.settings.pendingProgress.snoozed !== true) { S.settings.pendingProgress.snoozed = true; await saveSettings(); } render(); window.scrollTo(0, 0); break;
     case 'progapply': await applyNextBlock(); break;
+    case 'updopen': S.tab = 'plan'; S.updView = true; S.editDay = null; S.editEx = null; S.progView = false; S.splitOrder = false; render(); window.scrollTo(0, 0); break;
+    case 'updlater': S.updView = false; S.updSnoozed = true; render(); window.scrollTo(0, 0); break;
+    case 'updapply': await applyPlanUpdate(); break;
+    case 'updundo': if (S.planBeforeUpdate && confirm('Put your plan back to how it was before the last plan update?')) { loadPlan(S.planBeforeUpdate); await setMeta('plan', exportPlan()); S.planBeforeUpdate = null; await setMeta('planBeforeUpdate', null); render(); toast('Plan restored.'); } break;
     case 'progundo': if (S.planBeforeProgress && confirm('Put your plan back to how it was before the last block progression?')) { loadPlan(S.planBeforeProgress); await setMeta('plan', exportPlan()); S.planBeforeProgress = null; await setMeta('planBeforeProgress', null); render(); toast('Plan restored.'); } break;
     case 'orddone': S.splitOrder = false; render(); break;
     case 'ordmove': { const from = i; const to = i + +t.dataset.v; await reorderDays(() => moveDay(from, to)); render(); break; }
@@ -2115,6 +2158,8 @@ window.addEventListener('appinstalled', () => { installPrompt = null; toast('Ins
     await loadAll();
     if (S.draft) S.tab = 'workout';
     render();
+    checkPlanUpdate();
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - (S.updCheckedAt || 0) > 600000) checkPlanUpdate(); });
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       // A new deploy installs in the background; when it takes over, reload once so you are on it immediately.
       const hadController = !!navigator.serviceWorker.controller;
