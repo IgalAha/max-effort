@@ -2,11 +2,12 @@
 import { db, getMeta, setMeta } from './db.js';
 import { DAYS, EXERCISES, WEEK_NAMES, expandWeek, weekGroups, PLAN_OPTS, DELOAD_RULES, applyPlanOps, MUSCLES, exportPlan, loadPlan, resetPlan, splitShared, copyForDay, dayUsing, renumberDays, dayIndexOf, dayLabel } from './plan.js';
 import * as E from './engine.js';
+import { TEMPLATES, buildTemplatePlan } from './templates.js';
 import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv } from './importers.js';
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.3';
+const APP_VERSION = '10.4';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -211,7 +212,8 @@ function render() {
     else if (S.cardioForm) { back = 'cardioback'; title = 'Log cardio'; body = cardioForm(ctx); }
     else body = startView(ctx);
   } else if (S.tab === 'plan') {
-    if (S.updView && S.planUpdate) { back = 'updlater'; title = 'Plan update'; body = planUpdateView(); }
+    if (S.tplView) { back = 'tplback'; title = S.tplView === 'list' ? 'Plan templates' : 'Template'; body = templateView(); }
+    else if (S.updView && S.planUpdate) { back = 'updlater'; title = 'Plan update'; body = planUpdateView(); }
     else if (S.progView) { back = 'progback'; title = 'Next block'; body = nextBlockView(); }
     else if (S.splitOrder) { back = 'orddone'; title = 'Split order'; body = splitOrderView(); }
     else if (S.editEx) { back = 'exback'; title = 'Exercise'; body = exerciseEditor(); }
@@ -503,7 +505,7 @@ function nextBarHtml() {
   if (S.tab === 'home') return '';
   if (S.tab === 'workout' && (S.post || S.cardioForm)) return '';
   if (S.tab === 'me' && S.exportOpen) return '';
-  if (S.tab === 'plan' && (S.progView || S.updView || S.splitOrder || S.editEx || S.editDay != null)) return '';
+  if (S.tab === 'plan' && (S.progView || S.updView || S.tplView || S.splitOrder || S.editEx || S.editDay != null)) return '';
   const p = pos(); const d = DAYS[p.dayIdx]; if (!d) return '';
   const name = d.type === 'strength' ? (d.title || shortDay(d)) : `${shortDay(d)}${d.title ? ` · ${d.title}` : ''}`;
   const btn = d.type === 'strength' ? `<button class="nb-go" data-act="startday" data-d="${p.dayIdx}"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Start</button>`
@@ -553,6 +555,48 @@ async function applyPlanUpdate() {
   const done = await getMeta('appliedUpdates', []); done.push(u.id); await setMeta('appliedUpdates', done);
   S.planUpdate = null; S.updView = false; S.tab = 'plan'; render(); window.scrollTo(0, 0);
   toast(changes ? `Plan updated: ${changes} change${changes > 1 ? 's' : ''}.` : 'Marked as done.');
+}
+
+// ---------- TEMPLATES ----------
+function templatePlan(t) { return buildTemplatePlan(t, { workouts: S.data.workouts, catalog: EXERCISES, bodyweight: S.settings.bodyweight, today: todayStr(), opts: { ...PLAN_OPTS } }); }
+function templateView() {
+  if (S.tplView === 'list') {
+    return '<div class="small muted" style="margin-bottom:12px">Each template keeps the 5-week wave (Week 5 is your deload). Loads are worked out from your own estimated maxes when you pick one; you see them before anything changes.</div>' + TEMPLATES.map((t) => `<div class="card"><div class="row between"><h3>${esc(t.name)}</h3><span class="tag">${t.days.filter((d) => !d.type).length} lifting days</span></div><div class="small" style="margin:6px 0">${esc(t.blurb)}</div>
+      <div class="tiny muted">${esc(t.days.map((d) => d.title).join(' · '))}</div><button class="btn primary block sm" data-act="tplpick" data-id="${esc(t.id)}" style="margin-top:10px">Preview with my loads</button></div>`).join('');
+  }
+  const t = TEMPLATES.find((x) => x.id === S.tplView); if (!t) { S.tplView = 'list'; return templateView(); }
+  const { plan, missing } = templatePlan(t);
+  let h = `<div class="card"><div class="eyebrow">Template</div><div class="b" style="font-size:20px;margin:2px 0 4px">${esc(t.name)}</div><div class="small">${esc(t.blurb)}</div></div>`;
+  if (missing.length) h += `<div class="callout warn">No RPE-logged sets yet for ${esc(missing.join(', '))}, so they start at 0 kg. Type one week's numbers in Plan › Edit and the other weeks fill in.</div>`;
+  for (const d of plan.days) {
+    h += `<div class="card"><div class="row between"><b style="font-size:16px">${esc(d.name)}</b><span class="small muted">${esc(d.title || '')}</span></div>`;
+    if (d.exercises) h += d.exercises.map((e) => { const a = e.weeks[0][0]; const z = e.weeks[3][0]; return `<div class="pex"><div class="nm">${esc(plan.catalog[e.id].name)}</div><div class="sets">${a.sets}×${a.reps} @ ${a.weight} → ${z.sets}×${z.reps} @ ${z.weight} kg · <span class="muted">RPE ${e.rpe[0]} → ${e.rpe[3]}</span></div></div>`; }).join('');
+    else if (d.note) h += `<div class="small muted" style="margin-top:4px">${esc(d.note)}</div>`;
+    h += '</div>';
+  }
+  const p = pos();
+  h += `<button class="btn primary block" data-act="tplapply" data-v="new">Use it: start a new block today (Week 1)</button>
+    <button class="btn block" data-act="tplapply" data-v="keep" style="margin-top:8px">Use it, staying on Week ${p.week + 1} (${esc(WEEK_NAMES[p.week])})</button>
+    <div class="tiny faint" style="margin:10px 0;text-align:center">Replaces your days; your workouts, history and progression carry over. Undo from Plan › Manage plan.</div>`;
+  return h;
+}
+async function applyTemplate(id, mode) {
+  const t = TEMPLATES.find((x) => x.id === id); if (!t) return;
+  if (S.draft && !confirm('A workout is in progress. Switch plans anyway? The workout stays as it is.')) return;
+  const { plan } = templatePlan(t);
+  S.planBeforeUpdate = exportPlan(); await setMeta('planBeforeUpdate', S.planBeforeUpdate);
+  loadPlan(plan); splitShared(todayStr());
+  // template loads come straight from your estimated maxes, so last session's +/- kg must not be added on top
+  for (const d of DAYS) for (const e of d.exercises || []) stampEdit(e);
+  await setMeta('plan', exportPlan());
+  if (mode === 'new') {
+    const b = S.settings.blocks || (S.settings.blocks = []);
+    if (b[b.length - 1] !== todayStr()) b.push(todayStr());
+    S.settings.week = 0; S.settings.pendingProgress = null;
+  }
+  S.settings.dayIdx = 0; S.planWeek = S.settings.week; await saveSettings();
+  S.tplView = null; S.tab = 'plan'; render(); window.scrollTo(0, 0);
+  toast(`${t.name} is your plan now${mode === 'new' ? ', starting Week 1 today' : ''}.`);
 }
 
 // ---------- WORKOUT REVIEW ----------
@@ -1235,7 +1279,7 @@ function planView() {
         h += '<div style="margin-top:6px">';
         for (const ex of expandWeek(i, S.planWeek)) {
           const warm = ex.sets.filter((s) => s.type === 'warmup');
-          h += `<div class="pex"><div class="nm">${esc(ex.name)}</div><div class="sets">${warm.length ? `<span style="color:var(--warn)">W</span> ${groupsTxt(warm)} · ` : ''}${groupsTxt(ex.sets.filter((s) => s.type === 'work'))} kg</div></div>`;
+          h += `<div class="pex"><div class="nm">${esc(ex.name)}</div><div class="sets">${warm.length ? `<span style="color:var(--warn)">W</span> ${groupsTxt(warm)} · ` : ''}${groupsTxt(ex.sets.filter((s) => s.type === 'work'))} kg · <span class="muted">RPE ${E.targetRpe(ex.id, S.planWeek)}</span></div></div>`;
         }
         h += d.exercises.length ? '</div>' : '<div class="muted small">No exercises yet.</div></div>';
       } else h += `<div class="small" style="margin-top:6px">${esc(d.note || '')}</div>`;
@@ -1253,8 +1297,8 @@ function planView() {
     });
   }
   h += `<h2>Manage plan</h2><div class="card"><label class="l" style="margin-top:0" for="deloadrule">Deload week (W5)</label><select class="f" id="deloadrule" data-act="deloadrule">${Object.entries(DELOAD_RULES).map(([k, r]) => `<option value="${k}" ${PLAN_OPTS.deload === k ? 'selected' : ''}>${esc(r.label)}: ${esc(r.desc)}</option>`).join('')}</select>
-    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}${S.planBeforeUpdate ? '<button class="btn sm block" data-act="updundo">Undo last plan update</button>' : ''}${S.planUpdate ? '<button class="btn sm block" data-act="updopen">Review plan update from Claude</button>' : ''}</div>
-    <div class="card"><button class="btn primary block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
+    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}${S.planBeforeUpdate ? '<button class="btn sm block" data-act="updundo">Undo last plan update or template</button>' : ''}${S.planUpdate ? '<button class="btn sm block" data-act="updopen">Review plan update from Claude</button>' : ''}</div>
+    <div class="card"><button class="btn primary block" data-act="tplopen">Start from a template</button><div class="tiny muted" style="margin:2px 0 10px">Minimal, Classic or Upper / Lower, with loads worked out from your own lifts.</div><button class="btn block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
     <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" data-act="importplan" hidden></label></div>
     <button class="btn danger block sm" data-act="resetplan">Reset to original plan</button></div>`;
   return h;
@@ -1287,6 +1331,7 @@ function dayEditor() {
       ex.weeks[w].forEach((g, gi) => {
         h += `<div class="edrow"><input inputmode="numeric" data-pf="sets" data-k="${k}" data-g="${gi}" value="${g.sets}" aria-label="Sets"><span class="x">×</span><input inputmode="numeric" data-pf="reps" data-k="${k}" data-g="${gi}" value="${g.reps}" aria-label="Reps"><span class="x">@</span><input inputmode="decimal" data-pf="weight" data-k="${k}" data-g="${gi}" value="${g.weight}" aria-label="Kilograms"><button class="icon-btn" data-act="grpdel" data-k="${k}" data-g="${gi}" aria-label="Remove row">✕</button></div>`;
       });
+      h += `<div class="row" style="gap:10px;margin-top:8px;align-items:center"><label class="tiny muted" for="rpe-${k}" style="flex:1">Target RPE, Week ${w + 1}</label><input id="rpe-${k}" class="f" style="width:84px;min-height:42px;text-align:center" inputmode="decimal" data-pf="rpe" data-k="${k}" value="${E.targetRpe(ex.id, w)}"></div>`;
       h += `<div class="row wrap" style="margin-top:10px"><button class="btn sm" data-act="grpadd" data-k="${k}">+ Row</button>${ex.warm ? '' : `<button class="btn sm" data-act="warmadd" data-k="${k}">+ Warm-up</button>`}<button class="btn sm" data-act="copyweeks" data-k="${k}">Copy to all weeks</button></div></div>`;
     });
     h += '<button class="btn ghost block" data-act="planaddex">+ Add exercise</button>';
@@ -1332,6 +1377,11 @@ function onPlanField(el) {
     const v = num(el.value);
     if (v == null) return true;
     const f = el.dataset.pf;
+    if (f === 'rpe') {
+      const ex = d.exercises[k]; const base = (EXERCISES[ex.id] || {}).rpe || 8;
+      ex.rpe = Array.isArray(ex.rpe) ? ex.rpe : [base, base, base, base, Math.min(base, 7)];
+      ex.rpe[w] = Math.max(5, Math.min(10, Math.round(v * 2) / 2)); savePlan(); return true;
+    }
     if (f === 'wreps') d.exercises[k].warm.reps = Math.round(v);
     else if (f === 'wweight') d.exercises[k].warm.weight = v;
     else d.exercises[k].weeks[w][+el.dataset.g][f] = f === 'weight' ? v : Math.max(0, Math.round(v));
@@ -1339,7 +1389,7 @@ function onPlanField(el) {
     if (f === 'weight') stampEdit(ex);
     // Weeks that are still the empty 0 kg placeholder copy the week you just filled in, so later weeks and the
     // next block start from real numbers.
-    if (f !== 'wreps' && f !== 'wweight' && ex.weeks[w].some((g) => g.weight > 0)) {
+    if (f !== 'wreps' && f !== 'wweight' && f !== 'rpe' && ex.weeks[w].some((g) => g.weight > 0)) {
       const filled = [];
       for (let ow = 0; ow < 5; ow++) {
         if (ow === w || (ow === 4 && PLAN_OPTS.deload !== 'manual')) continue;
@@ -1958,6 +2008,10 @@ document.addEventListener('click', async (e) => {
     case 'progopen': S.tab = 'plan'; S.progView = true; S.editDay = null; S.editEx = null; render(); window.scrollTo(0, 0); break;
     case 'progback': S.progView = false; if (S.settings.pendingProgress && S.settings.pendingProgress.snoozed !== true) { S.settings.pendingProgress.snoozed = true; await saveSettings(); } render(); window.scrollTo(0, 0); break;
     case 'progapply': await applyNextBlock(); break;
+    case 'tplopen': S.tab = 'plan'; S.tplView = 'list'; S.editDay = null; S.editEx = null; render(); window.scrollTo(0, 0); break;
+    case 'tplpick': S.tplView = t.dataset.id; render(); window.scrollTo(0, 0); break;
+    case 'tplback': S.tplView = S.tplView && S.tplView !== 'list' ? 'list' : null; render(); window.scrollTo(0, 0); break;
+    case 'tplapply': if (confirm('Replace your current plan with this template? (You can undo it from Manage plan.)')) await applyTemplate(S.tplView, t.dataset.v); break;
     case 'updopen': S.tab = 'plan'; S.updView = true; S.editDay = null; S.editEx = null; S.progView = false; S.splitOrder = false; render(); window.scrollTo(0, 0); break;
     case 'updlater': S.updView = false; S.updSnoozed = true; render(); window.scrollTo(0, 0); break;
     case 'updapply': await applyPlanUpdate(); break;
@@ -2138,6 +2192,9 @@ window.addEventListener('popstate', () => {
   else if (S.sheet) S.sheet = null;
   else if (S.detail) S.detail = null;
   else if (S.splitOrder) S.splitOrder = false;
+  else if (S.tplView) S.tplView = S.tplView !== 'list' ? 'list' : null;
+  else if (S.updView) S.updView = false;
+  else if (S.progView) S.progView = false;
   else if (S.editEx) S.editEx = null;
   else if (S.editDay != null) S.editDay = null;
   else if (S.cardioForm) S.cardioForm = false;

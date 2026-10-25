@@ -73,6 +73,14 @@ const isHardEndurance = (c) => ['run', 'mtb', 'ride', 'hike'].includes(c.type) &
 // When you change an exercise's weights in the plan (by hand, by accepting a plan update, or by applying the
 // next-block progression), your new numbers are the baseline: sessions logged before that edit no longer carry
 // their +/- over, so nothing is counted twice.
+// The RPE to aim for: a plan slot can set one per week (templates do), else the exercise's own target.
+// Deload week (index 4) never asks for more than RPE 7.
+export function targetRpe(key, week) {
+  const base = (EXERCISES[key] || {}).rpe || 8;
+  let t = base;
+  if (week != null) for (const d of DAYS) for (const e of d.exercises || []) if (e.id === key && Array.isArray(e.rpe) && e.rpe[week] != null) t = e.rpe[week];
+  return week === 4 ? Math.min(t, 7) : t;
+}
 export const planEditedAt = (key) => { for (const d of DAYS) for (const e of d.exercises || []) if (e.id === key && e.editedAt) return e.editedAt; return null; };
 export function carriedOffset(history, step = 2.5, editedAt = null) {
   for (const h of history.slice(0, 6)) {
@@ -107,7 +115,7 @@ export function suggestExercise({ key, history, today, week, recovery, bodyweigh
   const step = meta.step || 2.5;
   const why = [];
   const flags = [];
-  const rpeTarget = week === 4 ? Math.min(meta.rpe, 7) : meta.rpe;
+  const rpeTarget = targetRpe(key, week);
   const hist = history.slice(0, 3);
   const editedAt = planEditedAt(key);
   const rawCarried = carriedOffset(history, step);
@@ -642,7 +650,7 @@ export function consistencyWeeks({ workouts, cardio, skips = [], weekStartDay, w
     for (const w of workouts.filter((x) => inW(x.date))) {
       for (const e of w.exercises) {
         const m = EXERCISES[e.key]; if (!m) continue;
-        const target = w.planRef && w.planRef.week === 4 ? Math.min(m.rpe || 8, 7) : (m.rpe || 8);
+        const target = targetRpe(e.key, w.planRef ? w.planRef.week : null);
         for (const s of workSets(e)) { sets++; if (s.rpe != null) diffs.push(s.rpe - target); }
       }
     }
@@ -676,7 +684,7 @@ export function blockProgression({ workouts, days, blockStart, end, bodyweight =
       const missed = w4.some((s) => s.planReps != null && s.reps < s.planReps);
       const rpes = w4.map((s) => s.rpe).filter((r) => r != null);
       const hardest = rpes.length ? Math.max(...rpes) : null;
-      const target = m.rpe || 8;
+      const target = targetRpe(slot.id, 3);
       const pain = hist.some((h) => h.ex.pain && h.ex.pain.severity >= 4);
       let pct = 0; let why; const gain = start && peak ? round1((peak / start - 1) * 100) : null;
       if (!hist.length) why = 'Not trained this block, so loads stay the same.';
@@ -706,7 +714,7 @@ export function workoutReview({ workout: w, workouts, bodyweight = 0, garmin = n
   const exercises = [];
   for (const e of w.exercises) {
     const m = EXERCISES[e.key] || { name: e.name, rpe: 8, muscles: [] };
-    const target = deload ? Math.min(m.rpe || 8, 7) : (m.rpe || 8);
+    const target = targetRpe(e.key, w.planRef ? w.planRef.week : null);
     if (e.skipped) {
       const ps = (e.planned || []).reduce((a, g) => a + (g.sets || 0), 0);
       plannedSets += ps; planReps += (e.planned || []).reduce((a, g) => a + (g.sets || 0) * (g.reps || 0), 0);
