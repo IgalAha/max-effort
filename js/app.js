@@ -7,7 +7,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.5';
+const APP_VERSION = '10.7';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -350,6 +350,7 @@ function detailView() {
     const k = it.skip;
     return `<div class="card"><div class="b" style="font-size:19px">${esc(it.title)}</div><div class="muted small">${fmtDate(k.date)} · Week ${k.week + 1}${k.block ? ` · Block ${k.block}` : ''}</div>
       <div class="small" style="margin-top:10px"><b>Reason:</b> ${esc(k.reason)}${k.note ? `<br><b>Note:</b> ${esc(k.note)}` : ''}</div></div>
+      <div class="card"><label class="l" for="sdate" style="margin-top:0">Date</label><input id="sdate" class="f" type="date" data-act="skipdetaildate" data-id="${esc(k.id)}" value="${esc(k.date)}" max="${todayStr()}"></div>
       <button class="btn block" data-act="undoskip" data-id="${esc(k.id)}">Undo skip</button>`;
   }
   let h = `<div class="card"><div class="feed"><div class="badge ${badgeCls(it.type)}">${badgeTxt(it.type)}</div><div class="grow"><div class="b" style="font-size:19px">${esc(it.title)}</div><div class="muted small">${fmtDate(it.date)} · ${esc(it.start)}</div></div></div>`;
@@ -389,10 +390,12 @@ function detailView() {
       h += c.avgHr > easyCeil() ? `<div class="callout warn">Average HR ${c.avgHr} is above your easy ceiling (${easyCeil()}). Fine for a planned hard session; not for an easy day.</div>` : `<div class="callout good">Average HR ${c.avgHr} is within your easy ceiling (${easyCeil()}).</div>`;
     }
     if (c.notes) h += `<div class="small muted" style="margin-top:8px">${esc(c.notes)}</div>`;
-    if (['run', 'mtb', 'ride', 'hike', 'walk', 'other'].includes(c.type) && E.daysBetween(c.date, todayStr()) <= 7) {
+    h += `<label class="l" for="cdate">Date</label><input id="cdate" class="f" type="date" data-act="cardiodate" data-id="${esc(c.id)}" value="${esc(c.date)}" max="${todayStr()}">`;
+    if (['run', 'mtb', 'ride', 'hike', 'walk', 'other'].includes(c.type)) {
       const opts = DAYS.map((x, i) => ({ x, i, st: dayState(i) })).filter(({ x }) => x.type === 'cardio');
       const cur = c.planDayId ? DAYS.findIndex((d) => d.id === c.planDayId) : -1;
-      h += `<label class="l">Counts as (this week's plan)</label><select class="f" data-act="cardioplan" data-id="${esc(c.id)}"><option value="" ${cur < 0 ? 'selected' : ''}>Not a plan day (extra session)</option>${opts.map(({ x, i, st }) => `<option value="${i}" ${cur === i ? 'selected' : ''}>${esc(x.name)} — ${esc(x.title)}${st && cur !== i ? ` (${st === 'skipped' ? 'was skipped' : 'already done'})` : ''}</option>`).join('')}</select>`;
+      const recentC = E.daysBetween(c.date, todayStr()) <= 7;
+      h += `<label class="l">Counts as (plan day)</label><select class="f" data-act="cardioplan" data-id="${esc(c.id)}"><option value="" ${cur < 0 ? 'selected' : ''}>Not a plan day (extra session)</option>${opts.map(({ x, i, st }) => `<option value="${i}" ${cur === i ? 'selected' : ''}>${esc(x.name)} — ${esc(x.title)}${recentC && st && cur !== i ? ` (${st === 'skipped' ? 'was skipped' : 'already done'})` : ''}</option>`).join('')}</select>`;
     }
     h += `</div><button class="btn block" data-act="exportday" data-d="${esc(it.date)}">Export this day</button><button class="btn danger block" data-act="delcardio" data-id="${esc(c.id)}">Delete this activity</button>`;
   }
@@ -603,6 +606,36 @@ async function applyTemplate(id, mode) {
   toast(`${t.name} is your plan now${mode === 'new' ? ', starting Week 1 today' : ''}.`);
 }
 
+// Re-assign a logged workout to another plan day ("I did Full B on the Full A day"). This week's status follows:
+// the new day becomes done on the workout's date, the old one goes back to to-do unless something else counts for it.
+async function setWorkoutDay(w, idx) {
+  const old = w.planRef ? dayIndexOf(w.planRef) : -1;
+  if (old === idx) return;
+  const thisWeek = E.daysBetween(w.date, todayStr()) <= 14 && (!w.planRef || w.planRef.week === S.settings.week);
+  w.planRef = idx >= 0 ? { week: w.planRef ? w.planRef.week : (E.daysBetween(w.date, todayStr()) <= 7 ? S.settings.week : 0), dayIdx: idx, dayId: DAYS[idx].id } : null;
+  if (idx >= 0) w.title = DAYS[idx].title || shortDay(DAYS[idx]);
+  await db.put('workouts', w);
+  if (thisWeek) {
+    const L = weekLog(); L.doneOn = L.doneOn || {};
+    if (old >= 0) {
+      const oid = DAYS[old].id;
+      const other = S.data.workouts.some((x) => x.id !== w.id && x.planRef && x.planRef.week === S.settings.week && dayIndexOf(x.planRef) === old && E.daysBetween(x.date, todayStr()) <= 14);
+      if (!other) { L.done = L.done.filter((x) => x !== oid); delete L.doneOn[oid]; }
+    }
+    if (idx >= 0) {
+      const nid = DAYS[idx].id;
+      S.skips = (S.skips || []).filter((k) => !(k.week === S.settings.week && dayIndexOf(k) === idx)); await setMeta('skips', S.skips);
+      L.skipped = L.skipped.filter((x) => x !== nid);
+      if (!L.done.includes(nid)) L.done.push(nid);
+      L.doneOn[nid] = w.date;
+    }
+    // if the day you were "on" is now done, move on to the next one still to do
+    if (dayState(pos().dayIdx)) { for (let k = pos().dayIdx; k < DAYS.length; k++) if (!dayState(k)) { S.settings.dayIdx = k; break; } }
+    await saveSettings();
+  }
+  toast(idx >= 0 ? `Now counts as ${DAYS[idx].name}.` : 'Now an extra session (not a plan day).');
+}
+
 // ---------- WORKOUT REVIEW ----------
 const miniTile = (k, v, cls = '') => `<div class="rv-mt"><span>${esc(k)}</span><b class="${cls}">${esc(String(v))}</b></div>`;
 function reviewNext(key, w) {
@@ -678,6 +711,13 @@ function reviewView(it) {
   const ring = pct == null ? '' : `<svg width="76" height="76" viewBox="0 0 76 76" role="img" aria-label="Plan completed: ${pct} percent of planned reps"><circle cx="38" cy="38" r="31" fill="none" stroke="var(--surface2)" stroke-width="8"/><circle cx="38" cy="38" r="31" fill="none" stroke="${pct >= 95 ? 'var(--good)' : pct >= 85 ? 'var(--warn)' : 'var(--bad)'}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${((C * Math.min(100, pct)) / 100).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 38 38)"/><text x="38" y="38" text-anchor="middle" font-size="18" font-weight="800" fill="var(--text)">${pct}%</text><text x="38" y="53" text-anchor="middle" font-size="9.5" font-weight="700" fill="var(--muted)">OF PLAN</text></svg>`;
   let h = `<div class="card"><div class="row between" style="align-items:flex-start;gap:12px"><div><div class="eyebrow">${esc(eyebrow)}</div><div class="b" style="font-size:30px;line-height:1.08;margin:2px 0 4px">${esc(w.title)}</div><div class="small muted">${esc(r.exercises.slice(0, 3).map((x) => x.name).join(', '))}${r.exercises.length > 3 ? ` +${r.exercises.length - 3}` : ''}</div></div>${ring}</div>
     <div style="font-size:16.5px;line-height:1.4;font-weight:600;margin-top:10px">${esc(r.verdict)}</div></div>`;
+  {
+    const cur = w.planRef ? dayIndexOf(w.planRef) : -1;
+    h += `<div class="card"><span class="rv-h">DATE &amp; PLAN DAY</span><div class="grid2" style="margin-top:6px"><div><label class="l" for="wdate" style="margin-top:0">Date</label><input id="wdate" class="f" type="date" data-act="workoutdate" data-id="${esc(w.id)}" value="${esc(w.date)}" max="${todayStr()}"></div>
+      <div><label class="l" for="wweek" style="margin-top:0">Plan week</label><select id="wweek" class="f" data-act="workoutweek" data-id="${esc(w.id)}" ${cur < 0 ? 'disabled' : ''}>${[0, 1, 2, 3, 4].map((k) => `<option value="${k}" ${w.planRef && w.planRef.week === k ? 'selected' : ''}>Week ${k + 1} · ${WEEK_NAMES[k]}</option>`).join('')}</select></div></div>
+      <label class="l" for="wday">Counts as</label><select id="wday" class="f" data-act="workoutday" data-id="${esc(w.id)}"><option value="" ${cur < 0 ? 'selected' : ''}>Not a plan day (extra session)</option>${DAYS.map((d, i) => d.type === 'strength' ? `<option value="${i}" ${i === cur ? 'selected' : ''}>${esc(d.name)}${d.title ? ` · ${esc(d.title)}` : ''}</option>` : '').join('')}</select>
+      <div class="tiny muted" style="margin-top:6px">Works for any session, however old: set the date it really happened and which plan day it was. History, progression, the review and this week's days all follow.</div></div>`;
+  }
   const vol = r.vsLast && r.vsLast.volumePct != null ? `<span class="${r.vsLast.volumePct > 0 ? 'ok-t' : r.vsLast.volumePct < 0 ? 'warn-t' : ''}">${r.vsLast.volumePct > 0 ? '▲' : r.vsLast.volumePct < 0 ? '▼' : '='} ${Math.abs(r.vsLast.volumePct)}% vs last ${esc(w.title)}</span>` : 'first session of this workout';
   h += `<div class="rv-tiles"><div class="rv-tile"><span>DURATION</span><b>${fmtDur(r.durationMin)}</b><em>${r.fromGarmin ? 'from Garmin' : 'from the logger'}</em></div>
     <div class="rv-tile"><span>VOLUME</span><b>${r.volume.toLocaleString()} kg</b><em>${vol}</em></div>
@@ -729,6 +769,7 @@ function daySheetOverlay() {
   return `<div class="backdrop" data-act="dayclose"><div class="sheet" data-act="noop"><div class="grab"></div>
     <h3 style="margin-bottom:2px">${esc(d.name)}</h3><div class="small muted" style="text-align:center;margin-bottom:12px">${esc(d.title)} · Week ${S.settings.week + 1} (${esc(WEEK_NAMES[S.settings.week])})${i === pos().dayIdx ? ' · <b style="color:var(--accent)">next up</b>' : ''}</div>
     <label class="l" style="margin-top:0">Status this week</label><div class="seg" style="margin-bottom:12px">${seg}</div>
+    ${st === 'done' || st === 'skipped' ? (() => { const wd = weekDates()[i]; return `<label class="l" for="day-date">${st === 'done' ? 'Done on' : 'Skipped on'}</label><input id="day-date" class="f" type="date" data-act="${st === 'done' ? 'daydate' : 'skipdate'}" data-d="${i}" value="${esc(wd ? wd.date : todayStr())}" max="${todayStr()}"><div class="tiny muted" style="margin:4px 0 6px">Change it if you did this day on another date. ${st === 'done' ? 'To move a logged workout to another plan day, open it and use “Counts as”.' : ''}</div>`; })() : ''}
     <label class="l">Logged for this day</label>
     ${links.length ? links.map((x) => `<button class="item" data-act="daylink" data-id="${esc(x.id)}" style="min-height:46px;font-size:15px">${esc(relDate(x.date))} · ${esc(x.label)} ›</button>`).join('') : `<div class="small muted" style="margin-bottom:10px">Nothing linked yet.${d.type === 'cardio' ? ' A run or ride can be linked from its activity page (Counts as).' : ''}</div>`}
     ${action}
@@ -739,7 +780,12 @@ async function setDayStatus(i, v) {
   const id = DAYS[i].id; const t = todayStr();
   const dropSkips = async () => { S.skips = (S.skips || []).filter((k) => !(k.week === S.settings.week && dayIndexOf(k) === i && E.daysBetween(k.date, t) <= 7)); await setMeta('skips', S.skips); };
   if (v === 'skipped') { S.daySheet = null; S.skipSheet = { dayIdx: i, reason: '', date: t, note: '' }; renderOverlay(); return; }
-  if (v === 'done') { await dropSkips(); await markDay(i, 'done'); toast(`${DAYS[i].name} marked done.`); }
+  if (v === 'done') {
+    const wk = S.settings.week; await dropSkips(); await markDay(i, 'done');
+    if (S.settings.week !== wk) { S.daySheet = null; toast(`${DAYS[i].name} done. That was the last day: on to Week ${S.settings.week + 1}.`); }
+    else toast(`${DAYS[i].name} marked done. Change the date below if it was another day.`);
+    renderOverlay(); render(); return;
+  }
   if (v === 'todo') {
     await dropSkips();
     // unlink cardio that counted for this day this week
@@ -2117,9 +2163,47 @@ document.addEventListener('change', async (e) => {
     const b = S.settings.blocks; if (b.length > 1 && el.value <= b[b.length - 2]) { toast('That is before the previous block started.'); render(); return; }
     b[b.length - 1] = el.value; await saveSettings(); toast('Block start updated.'); return;
   }
+  if (a === 'daydate' || a === 'skipdate') {
+    const i = +el.dataset.d; const v = el.value; if (!v || v > todayStr()) { toast('Pick a date up to today.'); render(); return; }
+    if (a === 'daydate') { const L = weekLog(); L.doneOn = L.doneOn || {}; L.doneOn[DAYS[i].id] = v; await saveSettings(); }
+    else { const k = (S.skips || []).filter((x) => x.week === S.settings.week && dayIndexOf(x) === i).sort((x, y) => (x.date < y.date ? 1 : -1))[0]; if (k) { k.date = v; await setMeta('skips', S.skips); } }
+    toast(`${DAYS[i].name}: ${a === 'daydate' ? 'done' : 'skipped'} on ${fmtDate(v)}.`); renderOverlay(); render(); return;
+  }
+  if (a === 'workoutdate') {
+    const w = S.data.workouts.find((x) => x.id === el.dataset.id); const v = el.value;
+    if (!w || !v || v > todayStr()) { toast('Pick a date up to today.'); render(); return; }
+    w.date = v; await db.put('workouts', w);
+    if (w.planRef && w.planRef.week === S.settings.week && E.daysBetween(v, todayStr()) <= 14) { const L = weekLog(); const id = (DAYS[dayIndexOf(w.planRef)] || {}).id; if (id && L.done.includes(id)) { L.doneOn = L.doneOn || {}; L.doneOn[id] = v; await saveSettings(); } }
+    S.detail = `w:${w.id}`; toast(`Moved to ${fmtDate(v)}.`); render(); return;
+  }
+  if (a === 'workoutweek') {
+    const w = S.data.workouts.find((x) => x.id === el.dataset.id); if (!w || !w.planRef) return;
+    w.planRef.week = +el.value; await db.put('workouts', w); toast(`Now Week ${+el.value + 1} (${WEEK_NAMES[+el.value]}).`); render(); return;
+  }
+  if (a === 'workoutday') {
+    const w = S.data.workouts.find((x) => x.id === el.dataset.id); if (!w) return;
+    await setWorkoutDay(w, el.value === '' ? -1 : +el.value); render(); return;
+  }
+  if (a === 'cardiodate') {
+    const c = S.data.cardio.find((x) => x.id === el.dataset.id); const v = el.value;
+    if (!c || !v || v > todayStr()) { toast('Pick a date up to today.'); render(); return; }
+    c.date = v; await db.put('cardio', c);
+    if (c.planDayId) { const L = weekLog(); if (L.done.includes(c.planDayId) && E.daysBetween(v, todayStr()) <= 14) { L.doneOn = L.doneOn || {}; L.doneOn[c.planDayId] = v; await saveSettings(); } }
+    toast(`Moved to ${fmtDate(v)}.`); render(); return;
+  }
+  if (a === 'skipdetaildate') {
+    const k = (S.skips || []).find((x) => x.id === el.dataset.id); const v = el.value;
+    if (!k || !v || v > todayStr()) { toast('Pick a date up to today.'); render(); return; }
+    k.date = v; await setMeta('skips', S.skips); S.detail = `s:${k.id}`; toast(`Skip moved to ${fmtDate(v)}.`); render(); return;
+  }
   if (a === 'cardioplan') {
     const c = S.data.cardio.find((x) => x.id === el.dataset.id); if (!c) return;
     const prevIdx = c.planDayId ? DAYS.findIndex((d) => d.id === c.planDayId) : -1;
+    const recent = E.daysBetween(c.date, todayStr()) <= 7;
+    if (!recent) { // an older session: just record which plan day it was; this week's days are not touched
+      if (el.value === '') delete c.planDayId; else c.planDayId = DAYS[+el.value].id;
+      await db.put('cardio', c); toast(el.value === '' ? 'Now an extra session.' : `Counted as ${DAYS[+el.value].name}.`); render(); return;
+    }
     if (prevIdx >= 0 && dayState(prevIdx) === 'done') await markDay(prevIdx, null);
     if (el.value === '') { delete c.planDayId; await db.put('cardio', c); toast('Now an extra session.'); render(); return; }
     const i = +el.value;

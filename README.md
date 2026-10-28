@@ -1,4 +1,4 @@
-# Max Effort — v10.5
+# Max Effort — v10.7
 
 Personal training app for strength, running and MTB: Hevy-style workout logger with RPE-based progression,
 editable 5-week plan, Garmin-based activity feed and training load, recovery status, injury log and a coach packet
@@ -116,6 +116,14 @@ Load steps: 2.5 kg for barbell and dumbbell lifts, 0.5 kg for the cable lateral 
 
 ## Changes in v9.5
 - Log cardio › Counts as: lists every cardio day of the week. Skipped days show "(was skipped)"; logging one marks it done and removes the skip. Defaults to the earliest open or skipped cardio day.
+
+## Changes in v10.7
+- Fix days after the fact, for any date:
+  - Workout review › Date & plan day: change the date, the plan week and which day it counts as.
+  - Run or ride: Date plus "Counts as".
+  - Skipped day: Date.
+- Day strip sheet: a "Done on" / "Skipped on" date you can change. It stays open after you mark a day done, so you can set the date right away.
+- Changes in the current week update this week's days and dates; older sessions update history only.
 
 ## Changes in v10.5
 - Plan updates can add a day and set the day order. You stay on the day you were on.
