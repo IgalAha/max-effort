@@ -279,6 +279,19 @@ export function applyPlanOps(plan, ops, stamp = null) {
         const d = day(op.day); const i = d ? (d.exercises || []).findIndex((e) => e.id === op.exercise) : -1;
         if (i < 0) { res(op, 'done'); continue; }
         d.exercises.splice(i, 1); res(op, 'apply');
+      } else if (op.op === 'addDay') {
+        if (day(op.day.id)) { res(op, 'done'); continue; }
+        if (op.unlessTypeCount && p.days.filter((d) => d.type === op.unlessTypeCount.type).length >= op.unlessTypeCount.count) { res(op, 'done', `You already have ${op.unlessTypeCount.count} ${op.unlessTypeCount.type} days.`); continue; }
+        const at = op.after ? p.days.findIndex((d) => d.id === op.after) : -1;
+        p.days.splice(at >= 0 ? at + 1 : p.days.length, 0, JSON.parse(JSON.stringify(op.day)));
+        res(op, 'apply');
+      } else if (op.op === 'order') {
+        const ids = op.order.filter((id) => day(id));
+        if (ids.length < op.order.length) { res(op, 'skip', 'Some of those days are no longer in your plan, so the order was left as it is.'); continue; }
+        const rest = p.days.filter((d) => !ids.includes(d.id));
+        const next = [...ids.map(day), ...rest];
+        if (next.every((d, i) => d === p.days[i])) { res(op, 'done'); continue; }
+        p.days = next; res(op, 'apply', rest.length ? `${rest.length} other day(s) kept at the end.` : '');
       } else if (op.op === 'deload') {
         p.opts = p.opts || {};
         if (p.opts.deload === op.rule) { res(op, 'done'); continue; }

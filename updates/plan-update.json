@@ -1,229 +1,37 @@
 {
- "id": "2026-10-22-squat-rdl-swap",
- "createdAt": "2026-10-22T21:10:00+03:00",
- "title": "Squat to Day 3, RDL to Day 1, Day 5 weeks filled in",
- "note": "Goblet Squat stays on Day 5. Takes effect from your Week 5 deload. Your history and progression for every lift carry over.",
+ "id": "2026-10-28-second-rest-day",
+ "createdAt": "2026-10-28T09:45:00+02:00",
+ "title": "Your 7-day week: Full A · Rest · Full B · Run · Full C · Rest · Long run",
+ "note": "Your Day 5 used to be a rest day; when it became Full Body C the plan dropped to 6 days. This adds the second rest day back and puts the week in your order.\nYou stay on the day you're on now.",
  "ops": [
   {
-   "op": "move",
-   "exercise": "rdl",
-   "toDay": "D1",
-   "index": 0,
-   "desc": "BB RDL moves to Day 1 (first exercise)."
-  },
-  {
-   "op": "move",
-   "exercise": "squat",
-   "toDay": "D3",
-   "index": 0,
-   "desc": "BB Back Squat moves to Day 3 (first exercise)."
-  },
-  {
-   "op": "dayTitle",
-   "day": "D1",
-   "title": "Hinge",
-   "desc": "Day 1 subtitle: “Hinge”."
-  },
-  {
-   "op": "dayTitle",
-   "day": "D3",
-   "title": "Squat + pull",
-   "desc": "Day 3 subtitle: “Squat + pull”."
-  },
-  {
-   "op": "dayTitle",
-   "day": "D7",
-   "title": "Upper + light legs",
-   "onlyIfEmpty": true,
-   "desc": "Day 5 subtitle: “Upper + light legs” (it had none, so workouts were saved as “Workout”)."
-  },
-  {
-   "op": "weeks",
-   "day": "D7",
-   "exercise": "incline_bench_press_dumbbell",
-   "onlyIfEmpty": true,
-   "weeks": {
-    "0": [
-     {
-      "sets": 1,
-      "reps": 4,
-      "weight": 27.5
-     },
-     {
-      "sets": 2,
-      "reps": 7,
-      "weight": 25
-     },
-     {
-      "sets": 1,
-      "reps": 7,
-      "weight": 22.5
-     }
-    ],
-    "1": [
-     {
-      "sets": 1,
-      "reps": 4,
-      "weight": 27.5
-     },
-     {
-      "sets": 2,
-      "reps": 7,
-      "weight": 25
-     },
-     {
-      "sets": 1,
-      "reps": 7,
-      "weight": 22.5
-     }
-    ],
-    "2": [
-     {
-      "sets": 1,
-      "reps": 4,
-      "weight": 27.5
-     },
-     {
-      "sets": 2,
-      "reps": 7,
-      "weight": 25
-     },
-     {
-      "sets": 2,
-      "reps": 7,
-      "weight": 22.5
-     }
-    ]
+   "op": "addDay",
+   "after": "D7",
+   "unlessTypeCount": {
+    "type": "rest",
+    "count": 2
    },
-   "desc": "Day 5 · Incline Bench Press (Dumbbell): Weeks 1–3 were empty (0 kg). W1–W2 1×4 @ 27.5 · 2×7 @ 25 · 1×7 @ 22.5, W3 1×4 @ 27.5 · 2×7 @ 25 · 2×7 @ 22.5 (from your Week 4)."
+   "day": {
+    "id": "D9",
+    "name": "Day 6 · Rest",
+    "type": "rest",
+    "title": "Rest",
+    "note": "Full rest or an easy walk."
+   },
+   "desc": "Add a second Rest day."
   },
   {
-   "op": "weeks",
-   "day": "D7",
-   "exercise": "lat_pulldown",
-   "onlyIfEmpty": true,
-   "weeks": {
-    "0": [
-     {
-      "sets": 3,
-      "reps": 10,
-      "weight": 62.5
-     }
-    ],
-    "1": [
-     {
-      "sets": 3,
-      "reps": 10,
-      "weight": 62.5
-     }
-    ],
-    "2": [
-     {
-      "sets": 4,
-      "reps": 10,
-      "weight": 62.5
-     }
-    ]
-   },
-   "desc": "Day 5 · Lat Pulldown: Weeks 1–3 were empty (0 kg). W1–W2 3×10 @ 62.5, W3 4×10 @ 62.5 (from your Week 4)."
-  },
-  {
-   "op": "weeks",
-   "day": "D7",
-   "exercise": "chest_dip_weighted",
-   "onlyIfEmpty": true,
-   "weeks": {
-    "0": [
-     {
-      "sets": 3,
-      "reps": 7,
-      "weight": 17.5
-     }
-    ],
-    "1": [
-     {
-      "sets": 3,
-      "reps": 7,
-      "weight": 17.5
-     }
-    ],
-    "2": [
-     {
-      "sets": 4,
-      "reps": 7,
-      "weight": 17.5
-     }
-    ]
-   },
-   "desc": "Day 5 · Chest Dip (Weighted): Weeks 1–3 were empty (0 kg). W1–W2 3×7 @ 17.5, W3 4×7 @ 17.5 (from your Week 4)."
-  },
-  {
-   "op": "weeks",
-   "day": "D7",
-   "exercise": "goblet_squat",
-   "onlyIfEmpty": true,
-   "weeks": {
-    "0": [
-     {
-      "sets": 3,
-      "reps": 12,
-      "weight": 28
-     }
-    ],
-    "1": [
-     {
-      "sets": 3,
-      "reps": 12,
-      "weight": 28
-     }
-    ],
-    "2": [
-     {
-      "sets": 4,
-      "reps": 12,
-      "weight": 28
-     }
-    ]
-   },
-   "desc": "Day 5 · Goblet Squat: Weeks 1–3 were empty (0 kg). W1–W2 3×12 @ 28, W3 4×12 @ 28 (from your Week 4)."
-  },
-  {
-   "op": "weeks",
-   "day": "D7",
-   "exercise": "upright_row",
-   "onlyIfEmpty": true,
-   "weeks": {
-    "0": [
-     {
-      "sets": 2,
-      "reps": 15,
-      "weight": 22.5
-     }
-    ],
-    "1": [
-     {
-      "sets": 2,
-      "reps": 15,
-      "weight": 22.5
-     }
-    ],
-    "2": [
-     {
-      "sets": 3,
-      "reps": 15,
-      "weight": 22.5
-     }
-    ]
-   },
-   "desc": "Day 5 · BB Upright Row: Weeks 1–3 were empty (0 kg). W1–W2 2×15 @ 22.5, W3 3×15 @ 22.5 (from your Week 4)."
-  },
-  {
-   "op": "catalog",
-   "exercise": "chest_dip_weighted",
-   "set": {
-    "bodyweight": true
-   },
-   "desc": "Chest Dip (Weighted): count your body weight in its estimated max."
+   "op": "order",
+   "order": [
+    "D1",
+    "D6",
+    "D3",
+    "D2",
+    "D7",
+    "D9",
+    "D8"
+   ],
+   "desc": "Order: Day 1 Full A · Day 2 Rest · Day 3 Full B · Day 4 Run · Day 5 Full C · Day 6 Rest · Day 7 Long run."
   }
  ]
 }

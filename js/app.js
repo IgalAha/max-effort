@@ -7,7 +7,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.4';
+const APP_VERSION = '10.5';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -550,7 +550,11 @@ async function applyPlanUpdate() {
   const { plan, changes } = applyPlanOps(exportPlan(), u.ops, `${todayStr()}T${nowHHMM()}`);
   if (changes) {
     S.planBeforeUpdate = exportPlan(); await setMeta('planBeforeUpdate', S.planBeforeUpdate);
-    loadPlan(plan); splitShared(todayStr()); await setMeta('plan', exportPlan());
+    const curId = (DAYS[pos().dayIdx] || {}).id;
+    loadPlan(plan); renumberDays(); splitShared(todayStr()); await setMeta('plan', exportPlan());
+    // stay on the same day you were on, even if days were added or moved around it
+    const ni = DAYS.findIndex((d) => d.id === curId);
+    if (ni >= 0 && ni !== S.settings.dayIdx) { S.settings.dayIdx = ni; await saveSettings(); }
   }
   const done = await getMeta('appliedUpdates', []); done.push(u.id); await setMeta('appliedUpdates', done);
   S.planUpdate = null; S.updView = false; S.tab = 'plan'; render(); window.scrollTo(0, 0);
