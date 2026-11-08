@@ -7,7 +7,7 @@ import { parseHevy, parseGarmin, parseSleep, parseRestingHr, parseRestingHrCsv }
 import { COACH_PROMPT } from './coach_prompt.js';
 import * as X from './export.js';
 
-const APP_VERSION = '10.7';
+const APP_VERSION = '10.8';
 let installPrompt = null;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const S = {
@@ -118,6 +118,7 @@ async function loadAll() {
   S.skips = await getMeta('skips', []);
   S.planBeforeProgress = await getMeta('planBeforeProgress', null);
   S.planBeforeUpdate = await getMeta('planBeforeUpdate', null);
+  S.planBeforeLoads = await getMeta('planBeforeLoads', null);
   const plan = await getMeta('plan', null);
   if (plan) loadPlan(plan);
   if (splitShared(todayStr())) await setMeta('plan', exportPlan());
@@ -164,6 +165,41 @@ function suggestionsFor(dayIdx, week, ctx) {
     const sug = E.suggestExercise({ key: ex.id, history, today: ctx.t, week, recovery: ctx.recovery, bodyweight: S.settings.bodyweight, yesterday: yesterdayCardio(ctx.t) });
     return { ex, sug };
   });
+}
+
+// The loads the Workout screen would start with for one week of a day: plan loads plus the engine's step.
+// Sets, reps and warm-ups never change; only the kg of working sets move. Deload week (W5) is not progressed.
+function suggestedLoads(dayIdx, week) {
+  const d = DAYS[dayIdx];
+  if (!d || d.type !== 'strength' || week === 4) return [];
+  const ctx = context();
+  return (d.exercises || []).map((ex) => {
+    const sug = E.suggestExercise({ key: ex.id, history: E.historyFor(S.data.workouts, ex.id), today: ctx.t, week, recovery: ctx.recovery, bodyweight: S.settings.bodyweight, yesterday: yesterdayCardio(ctx.t) });
+    const cur = weekGroups(ex, week);
+    const next = sug.delta ? cur.map((g) => ({ ...g, weight: g.weight > 0 ? Math.max(0, r05(g.weight + sug.delta)) : g.weight })) : cur;
+    const changed = JSON.stringify(next) !== JSON.stringify(cur);
+    return { ex, name: (metaOf(ex.id) || { name: ex.id }).name, cur, next, changed, action: sug.action };
+  });
+}
+
+async function applyLoads(dayIdx, week) {
+  if (week === 4) return;
+  if (S.draft && !confirm('A workout is in progress. Change the plan loads anyway? The workout stays as it is.')) return;
+  const changes = suggestedLoads(dayIdx, week).filter((r) => r.changed);
+  if (!changes.length) { toast('Your plan already matches the suggested loads.'); return; }
+  if (!confirm(`Write the suggested loads into Week ${week + 1} for ${changes.length} exercise${changes.length > 1 ? 's' : ''}? Sets and reps stay the same. You can revert from Plan › Manage plan.`)) return;
+  S.planBeforeLoads = exportPlan(); await setMeta('planBeforeLoads', S.planBeforeLoads);
+  for (const r of changes) { r.ex.weeks[week] = r.next; stampEdit(r.ex); }
+  await setMeta('plan', exportPlan());
+  render();
+  toast(`Week ${week + 1} loads updated for ${changes.length} exercise${changes.length > 1 ? 's' : ''}.`);
+}
+
+async function revertLoads() {
+  if (!S.planBeforeLoads || !confirm('Put the plan back to how it was before the last load update?')) return;
+  loadPlan(S.planBeforeLoads); await setMeta('plan', exportPlan());
+  S.planBeforeLoads = null; await setMeta('planBeforeLoads', null);
+  render(); toast('Loads reverted.');
 }
 
 function nextExposure(key, from) {
@@ -1331,6 +1367,11 @@ function planView() {
           const warm = ex.sets.filter((s) => s.type === 'warmup');
           h += `<div class="pex"><div class="nm">${esc(ex.name)}</div><div class="sets">${warm.length ? `<span style="color:var(--warn)">W</span> ${groupsTxt(warm)} · ` : ''}${groupsTxt(ex.sets.filter((s) => s.type === 'work'))} kg · <span class="muted">RPE ${E.targetRpe(ex.id, S.planWeek)}</span></div></div>`;
         }
+        const sugg = suggestedLoads(i, S.planWeek);
+        const moves = sugg.filter((r) => r.changed);
+        if (moves.length) {
+          h += `<div class="callout info" style="margin:8px 0 0"><div class="small"><b>Suggested loads for Week ${S.planWeek + 1}</b> (from your last sessions)</div>${moves.map((r) => `<div class="tiny" style="margin-top:4px">${esc(r.name)}: ${groupsTxtRows(r.cur)} → <b>${groupsTxtRows(r.next)} kg</b></div>`).join('')}<button class="btn sm primary block" data-act="useloads" data-d="${i}" style="margin-top:8px">Use these loads in my plan</button></div>`;
+        }
         h += d.exercises.length ? '</div>' : '<div class="muted small">No exercises yet.</div></div>';
       } else h += `<div class="small" style="margin-top:6px">${esc(d.note || '')}</div>`;
       h += '</div>';
@@ -1347,7 +1388,7 @@ function planView() {
     });
   }
   h += `<h2>Manage plan</h2><div class="card"><label class="l" style="margin-top:0" for="deloadrule">Deload week (W5)</label><select class="f" id="deloadrule" data-act="deloadrule">${Object.entries(DELOAD_RULES).map(([k, r]) => `<option value="${k}" ${PLAN_OPTS.deload === k ? 'selected' : ''}>${esc(r.label)}: ${esc(r.desc)}</option>`).join('')}</select>
-    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}${S.planBeforeUpdate ? '<button class="btn sm block" data-act="updundo">Undo last plan update or template</button>' : ''}${S.planUpdate ? '<button class="btn sm block" data-act="updopen">Review plan update from Claude</button>' : ''}</div>
+    <button class="btn block" data-act="progopen" style="margin-top:12px">Next block: progress my loads</button>${S.planBeforeProgress ? '<button class="btn sm block" data-act="progundo">Undo last block progression</button>' : ''}${S.planBeforeLoads ? '<button class="btn sm block" data-act="loadsundo">Revert last load update</button>' : ''}${S.planBeforeUpdate ? '<button class="btn sm block" data-act="updundo">Undo last plan update or template</button>' : ''}${S.planUpdate ? '<button class="btn sm block" data-act="updopen">Review plan update from Claude</button>' : ''}</div>
     <div class="card"><button class="btn primary block" data-act="tplopen">Start from a template</button><div class="tiny muted" style="margin:2px 0 10px">Minimal, Classic or Upper / Lower, with loads worked out from your own lifts.</div><button class="btn block" data-act="ordopen">Change split order</button><button class="btn block" data-act="addday">+ Add a day</button>
     <div class="grid2" style="margin-top:10px"><button class="btn sm" data-act="exportplan">Export plan</button><label class="btn sm" style="cursor:pointer">Import plan<input type="file" data-act="importplan" hidden></label></div>
     <button class="btn danger block sm" data-act="resetplan">Reset to original plan</button></div>`;
@@ -2065,6 +2106,8 @@ document.addEventListener('click', async (e) => {
     case 'updopen': S.tab = 'plan'; S.updView = true; S.editDay = null; S.editEx = null; S.progView = false; S.splitOrder = false; render(); window.scrollTo(0, 0); break;
     case 'updlater': S.updView = false; S.updSnoozed = true; render(); window.scrollTo(0, 0); break;
     case 'updapply': await applyPlanUpdate(); break;
+    case 'useloads': await applyLoads(+t.dataset.d, S.planWeek ?? pos().week); break;
+    case 'loadsundo': await revertLoads(); break;
     case 'updundo': if (S.planBeforeUpdate && confirm('Put your plan back to how it was before the last plan update?')) { loadPlan(S.planBeforeUpdate); await setMeta('plan', exportPlan()); S.planBeforeUpdate = null; await setMeta('planBeforeUpdate', null); render(); toast('Plan restored.'); } break;
     case 'progundo': if (S.planBeforeProgress && confirm('Put your plan back to how it was before the last block progression?')) { loadPlan(S.planBeforeProgress); await setMeta('plan', exportPlan()); S.planBeforeProgress = null; await setMeta('planBeforeProgress', null); render(); toast('Plan restored.'); } break;
     case 'orddone': S.splitOrder = false; render(); break;

@@ -157,6 +157,13 @@ export function suggestExercise({ key, history, today, week, recovery, bodyweigh
     return out('Reduce', carried - 0.05 * topW);
   }
 
+  // 3b. loads were written into the plan after your last session (Use suggested loads, a plan edit, or an update):
+  // that session already fed the new numbers, so it must not add another step. Follow the plan until you log a session.
+  if (editedAt && `${last.date}T${last.start || '00:00'}` < editedAt && week !== 4) {
+    why.push('You set these loads in the plan after your last session, so the plan numbers are used as they are. The next session will guide the next step.');
+    return out('Follow plan', 0);
+  }
+
   // 4. deload: plan loads (never above them), low effort
   if (week === 4) {
     why.push('Deload week: lighter loads built from your Week 4, stay at RPE ≤7, no progression.');

@@ -1,37 +1,19 @@
 {
- "id": "2026-10-28-second-rest-day",
- "createdAt": "2026-10-28T09:45:00+02:00",
- "title": "Your 7-day week: Full A · Rest · Full B · Run · Full C · Rest · Long run",
- "note": "Your Day 5 used to be a rest day; when it became Full Body C the plan dropped to 6 days. This adds the second rest day back and puts the week in your order.\nYou stay on the day you're on now.",
- "ops": [
-  {
-   "op": "addDay",
-   "after": "D7",
-   "unlessTypeCount": {
-    "type": "rest",
-    "count": 2
-   },
-   "day": {
-    "id": "D9",
-    "name": "Day 6 · Rest",
-    "type": "rest",
-    "title": "Rest",
-    "note": "Full rest or an easy walk."
-   },
-   "desc": "Add a second Rest day."
-  },
-  {
-   "op": "order",
-   "order": [
-    "D1",
-    "D6",
-    "D3",
-    "D2",
-    "D7",
-    "D9",
-    "D8"
-   ],
-   "desc": "Order: Day 1 Full A · Day 2 Rest · Day 3 Full B · Day 4 Run · Day 5 Full C · Day 6 Rest · Day 7 Long run."
-  }
- ]
+  "id": "2026-11-08-upright-row-weights",
+  "createdAt": "2026-11-08T12:50:00+02:00",
+  "title": "Fix Day 1 Upright Row: Weeks 2–4 back to 22.5 kg",
+  "note": "Weeks 2–4 of Upright Row on Day 1 were saved as 2.5 kg, which looks like a typo for 22.5 kg (Week 1 is 22.5 kg). This sets Weeks 2–4 back to 22.5 kg with the same sets and reps. Your workouts and history are never touched.",
+  "ops": [
+    {
+      "op": "weeks",
+      "day": "D1",
+      "exercise": "upright_row__D1",
+      "weeks": {
+        "1": [{ "sets": 2, "reps": 12, "weight": 22.5 }],
+        "2": [{ "sets": 2, "reps": 12, "weight": 22.5 }],
+        "3": [{ "sets": 3, "reps": 12, "weight": 22.5 }]
+      },
+      "desc": "Day 1 Upright Row: Weeks 2–4 from 2.5 kg to 22.5 kg."
+    }
+  ]
 }
